@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="minibookx-input-toggle">
+  <schema id="org.gnome.shell.extensions.minibookx-input-toggle"
+          path="/org/gnome/shell/extensions/minibookx-input-toggle/">
+
+    <key name="toggle-hid" type="as">
+      <default><![CDATA[['<Control>Escape']]]></default>
+      <summary>Toggle the keyboard and touchpad lock</summary>
+      <description>
+        Shortcut that engages the lock. While the lock is engaged the keyboard
+        is grabbed by the hid-lock daemon, which watches for the same
+        combination itself and releases -- so the shortcut works in both
+        directions even though the shell never sees the second press.
+      </description>
+    </key>
+
+  </schema>
+</schemalist>

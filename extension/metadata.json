@@ -1,0 +1,10 @@
+{
+  "name": "Minibook X Input Toggle",
+  "description": "Panel button and Ctrl+Esc shortcut that disable the internal keyboard and touchpad, to stop accidental input in yoga/tablet mode. The touchscreen stays live so you can always tap the icon to re-enable.",
+  "uuid": "minibookx-input-toggle@isalin.github.com",
+  "settings-schema": "org.gnome.shell.extensions.minibookx-input-toggle",
+  "session-modes": ["user"],
+  "shell-version": [
+    "50"
+  ]
+}

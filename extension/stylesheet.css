@@ -1,0 +1,12 @@
+/* Locked state has to be readable at arm's length, held as a tablet, so it
+ * changes both shape (icon) and colour rather than relying on either alone. */
+.minibookx-hid-toggle.hid-locked {
+    color: #e01b24;
+}
+
+/* A finger is not a mouse pointer: widen the hit area a little without
+ * disturbing the spacing of the other panel icons. */
+.minibookx-hid-toggle {
+    -natural-hpadding: 10px;
+    -minimum-hpadding: 8px;
+}

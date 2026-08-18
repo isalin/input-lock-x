@@ -1,0 +1,105 @@
+#!/bin/sh
+# Control the Minibook X HID lock from a shell, including over SSH.
+#
+#   hid-toggle on       disable keyboard + touchpad
+#   hid-toggle off      re-enable them
+#   hid-toggle toggle   flip whichever way it currently is
+#   hid-toggle status   report unit, daemon, state file and matched devices
+#
+# For the case where things are already wedged, use hid-emergency-unlock.
+
+set -u
+
+UNIT="minibookx-hid-lock.service"
+STATE="/run/minibookx-hid-lock.state"
+DAEMON_BIN="/usr/local/bin/hid-lock-daemon"
+
+usage() {
+    sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-2}"
+}
+
+is_locked() {
+    [ -e "$STATE" ]
+}
+
+need_root() {
+    [ "$(id -u)" -eq 0 ] && return 0
+
+    # `ssh host hid-toggle off` has no TTY, so sudo cannot prompt. Prefer the
+    # passwordless path, and fail with instructions rather than on an
+    # unanswerable prompt. Probe this exact command, not an unrelated one --
+    # the sudoers drop-in is scoped to these two scripts.
+    if sudo -n -l -- "$0" >/dev/null 2>&1; then
+        exec sudo -n -- "$0" "$@"
+    fi
+    if [ ! -t 0 ]; then
+        echo "hid-toggle needs root, but sudo wants a password and this" >&2
+        echo "session has no terminal. Retry with:" >&2
+        echo "    ssh -t <host> sudo hid-toggle $*" >&2
+        exit 1
+    fi
+    exec sudo -- "$0" "$@"
+}
+
+cmd_status() {
+    printf 'lock:       %s\n' "$(is_locked && echo ENGAGED || echo released)"
+    printf 'unit:       %s\n' "$(systemctl is-active "$UNIT" 2>/dev/null)"
+    printf 'state file: %s\n' "$([ -e "$STATE" ] && echo "$STATE" || echo absent)"
+
+    if [ -x "$DAEMON_BIN" ]; then
+        echo
+        if [ "$(id -u)" -eq 0 ]; then
+            "$DAEMON_BIN" --list
+        else
+            echo "devices:    (run as root to list matched devices)"
+        fi
+    else
+        echo "daemon:     NOT INSTALLED at $DAEMON_BIN"
+    fi
+}
+
+case "${1:-}" in
+    on)
+        need_root "$@"
+        # The unit is Type=notify, so this only returns once the devices are
+        # really grabbed -- but confirm against the state file rather than
+        # reporting a lock we have not actually observed.
+        if ! systemctl start "$UNIT"; then
+            echo "failed to engage HID lock; see: journalctl -u $UNIT" >&2
+            exit 1
+        fi
+        if is_locked; then
+            echo "HID lock engaged (Ctrl+Esc on the laptop releases it)"
+        else
+            echo "unit started but $STATE is missing; lock is NOT engaged" >&2
+            exit 1
+        fi
+        ;;
+    off)
+        need_root "$@"
+        systemctl stop "$UNIT" || exit 1
+        if is_locked; then
+            echo "unit stopped but $STATE remains; try hid-emergency-unlock" >&2
+            exit 1
+        fi
+        echo "HID lock released"
+        ;;
+    toggle)
+        need_root "$@"
+        if is_locked; then
+            exec "$0" off
+        else
+            exec "$0" on
+        fi
+        ;;
+    status)
+        cmd_status
+        ;;
+    -h|--help|help)
+        usage 0
+        ;;
+    *)
+        usage 2
+        ;;
+esac

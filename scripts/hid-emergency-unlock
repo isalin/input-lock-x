@@ -1,0 +1,134 @@
+#!/bin/sh
+# Unconditionally restore keyboard and touchpad input.
+#
+# This is the "I am locked out, SSH in and fix it" button. It is idempotent,
+# makes no assumptions about the current state, and keeps going if any single
+# step fails. Run it as often as you like.
+#
+#   ssh minibook hid-emergency-unlock
+
+set -u
+
+UNIT="minibookx-hid-lock.service"
+STATE="/run/minibookx-hid-lock.state"
+# Anchored on the full install path, so an editor with the source file open or
+# a `journalctl ... hid-lock-daemon` is not mistaken for the daemon. Telling a
+# locked-out user "STILL RUNNING -- something is very wrong" when input is
+# actually fine is the worst possible lie.
+DAEMON='/usr/local/bin/hid-lock-daemon'
+
+# The path alone is not enough: `hid-toggle status` runs the very same binary
+# with --list. Killing that, or counting it as a stuck daemon, would make this
+# script report a failed recovery -- which now also aborts uninstall.sh. Only
+# instances that can actually hold a grab count.
+daemon_pids() {
+    for p in $(pgrep -f "$DAEMON" 2>/dev/null); do
+        [ "$p" = "$$" ] && continue
+        # The process may have exited between pgrep and here; guard the
+        # redirect rather than let the shell complain about it.
+        [ -r "/proc/$p/cmdline" ] || continue
+        if tr '\0' ' ' <"/proc/$p/cmdline" | grep -q -- '--list'; then
+            continue
+        fi
+        echo "$p"
+    done
+}
+
+if [ "$(id -u)" -ne 0 ]; then
+    # `ssh host hid-emergency-unlock` gets no TTY, so a password prompt would
+    # fail with "a terminal is required" -- in the one situation where this
+    # script has to work. Try the passwordless path first, and if that is not
+    # available say exactly what to run instead of dying on a prompt nobody
+    # can answer.
+    # `sudo -n -l -- CMD`, not `sudo -n true`: the sudoers drop-in grants
+    # NOPASSWD for this script specifically, so probing with an unrelated
+    # command would report "password required" and skip the path that works.
+    if sudo -n -l -- "$0" >/dev/null 2>&1; then
+        exec sudo -n -- "$0" "$@"
+    fi
+    if [ ! -t 0 ]; then
+        echo "hid-emergency-unlock needs root, but sudo wants a password and" >&2
+        echo "this session has no terminal. Run install.sh to allow" >&2
+        echo "passwordless use, or retry with:" >&2
+        echo >&2
+        echo "    ssh -t <host> sudo hid-emergency-unlock" >&2
+        exit 1
+    fi
+    exec sudo -- "$0" "$@"
+fi
+
+echo "== Minibook X emergency HID unlock =="
+
+echo "-- stopping ${UNIT}"
+systemctl stop "$UNIT" 2>&1 || echo "   (systemctl stop failed, continuing)"
+
+pids="$(daemon_pids)"
+if [ -n "$pids" ]; then
+    echo "-- daemon still running, sending TERM"
+    # Unquoted on purpose: one kill for the whole pid list.
+    kill $pids 2>/dev/null || true
+    # Give it a moment to release its grabs cleanly before escalating.
+    i=0
+    while [ "$i" -lt 20 ] && [ -n "$(daemon_pids)" ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    pids="$(daemon_pids)"
+    if [ -n "$pids" ]; then
+        echo "-- daemon ignored TERM, sending KILL"
+        kill -9 $pids 2>/dev/null || true
+        # The kernel drops an EVIOCGRAB when the fd closes, so a KILL still
+        # restores input.
+    fi
+fi
+
+# Clear any sysfs inhibit too. This daemon never sets one, but another tool or
+# a manual experiment might have, and the symptom is identical: dead input.
+echo "-- clearing sysfs inhibit flags"
+for f in /sys/class/input/input*/inhibited; do
+    [ -w "$f" ] || continue
+    if [ "$(cat "$f" 2>/dev/null)" = "1" ]; then
+        name="$(cat "$(dirname "$f")/name" 2>/dev/null)"
+        echo "   un-inhibiting $(dirname "$f") (${name})"
+        echo 0 >"$f" 2>/dev/null || echo "   failed to write $f"
+    fi
+done
+
+echo "-- removing ${STATE}"
+rm -f "$STATE"
+
+echo
+echo "== Result =="
+failed=0
+printf 'unit:       %s\n' "$(systemctl is-active "$UNIT" 2>/dev/null)"
+if [ -n "$(daemon_pids)" ]; then
+    echo "daemon:     STILL RUNNING -- something is very wrong"
+    failed=1
+else
+    echo "daemon:     not running"
+fi
+if [ -e "$STATE" ]; then
+    echo "state file: STILL PRESENT -- something is very wrong"
+    failed=1
+else
+    echo "state file: absent"
+fi
+inhibited="$(grep -l '^1$' /sys/class/input/input*/inhibited 2>/dev/null | wc -l | tr -d ' ')"
+printf 'inhibited:  %s device(s)\n' "$inhibited"
+# A surviving inhibit means input is still dead, so it has to reach the exit
+# status like the other two checks -- the write above has a failure branch.
+if [ "$inhibited" -ne 0 ]; then
+    failed=1
+fi
+echo
+
+# Exit status has to be honest: `ssh laptop hid-emergency-unlock && echo ok`
+# must not print ok after a failed recovery, and uninstall.sh relies on this to
+# refuse to start deleting things while a lock is still held.
+if [ "$failed" -ne 0 ]; then
+    echo "RECOVERY INCOMPLETE -- input may still be locked." >&2
+    echo "Try: sudo systemctl kill -s KILL $UNIT" >&2
+    exit 1
+fi
+
+echo "Input should be restored."
