@@ -1,0 +1,23 @@
+// Let an active local session in an administrator group start and stop the
+// input lock unit without a password prompt -- a password prompt is useless
+// when the keyboard is the thing being disabled.
+//
+// Scoped to this single unit: it grants no other systemd control. It also
+// requires an active local seat, so it cannot be used over SSH (the
+// input-lock-x / input-lock-x-emergency-unlock scripts use sudo for that).
+//
+// Three group names because distributions disagree: wheel on Fedora, Arch and
+// openSUSE, sudo on Debian and Ubuntu, admin on some older derivatives. A
+// group that does not exist on a given system simply never matches, so listing
+// all three grants nothing extra anywhere.
+
+polkit.addRule(function (action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "input-lock-x.service" &&
+        subject.local && subject.active &&
+        (subject.isInGroup("wheel") ||
+         subject.isInGroup("sudo") ||
+         subject.isInGroup("admin"))) {
+        return polkit.Result.YES;
+    }
+});

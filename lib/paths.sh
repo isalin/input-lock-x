@@ -1,0 +1,37 @@
+# Everything the current generation of this tool installs.
+# shellcheck shell=bash
+#
+# Sourced by both install.sh and uninstall.sh, for the same reason
+# lib/legacy-paths.sh exists: the failure mode of two lists is a root-owned
+# file left behind by an uninstall that thought it was finished.
+
+UUID="input-lock-x@isalin.github.io"
+UNIT="input-lock-x.service"
+CONF="/etc/input-lock-x.conf"
+STATE="/run/input-lock-x.state"
+DCONF_PATH="/org/gnome/shell/extensions/input-lock-x/"
+EXT_DIR="${HOME}/.local/share/gnome-shell/extensions/${UUID}"
+
+UNIT_FILE="/etc/systemd/system/${UNIT}"
+POLKIT_RULE="/etc/polkit-1/rules.d/49-input-lock-x.rules"
+SUDOERS="/etc/sudoers.d/input-lock-x"
+CLI="/usr/local/bin/input-lock-x"
+UNLOCK="/usr/local/bin/input-lock-x-emergency-unlock"
+# /usr/local/bin so SELinux labels it bin_t. From /usr/local/lib (lib_t) there
+# is no domain transition, the service runs as init_t, and every
+# /dev/input/event* open fails with EACCES even though the service is root.
+DAEMON_BIN="/usr/local/bin/input-lock-x-daemon"
+# Matched against full command lines, so it has to be what shows up in ps: the
+# daemon is a python script, so $0 is the interpreter and the path is argv[1].
+DAEMON_PATTERN="input-lock-x-daemon"
+
+# Removable files. Not CONF: a config may have been edited by hand, so it is
+# left on disk and only mentioned in the closing message.
+FILES=(
+    "$UNIT_FILE"
+    "$POLKIT_RULE"
+    "$SUDOERS"
+    "$CLI"
+    "$UNLOCK"
+    "$DAEMON_BIN"
+)

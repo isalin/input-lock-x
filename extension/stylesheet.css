@@ -1,12 +1,19 @@
 /* Locked state has to be readable at arm's length, held as a tablet, so it
  * changes both shape (icon) and colour rather than relying on either alone. */
-.minibookx-hid-toggle.hid-locked {
+.input-lock-x-toggle.input-lock-x-locked {
     color: #e01b24;
+}
+
+/* Without the daemon nothing can be locked. Dimmed rather than hidden: the
+ * button is still the thing that explains what is missing when tapped. */
+.input-lock-x-toggle.input-lock-x-missing {
+    color: #f5c211;
+    opacity: 0.6;
 }
 
 /* A finger is not a mouse pointer: widen the hit area a little without
  * disturbing the spacing of the other panel icons. */
-.minibookx-hid-toggle {
+.input-lock-x-toggle {
     -natural-hpadding: 10px;
     -minimum-hpadding: 8px;
 }

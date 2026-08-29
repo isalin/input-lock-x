@@ -1,23 +1,24 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Unconditionally restore keyboard and touchpad input.
 #
 # This is the "I am locked out, SSH in and fix it" button. It is idempotent,
 # makes no assumptions about the current state, and keeps going if any single
 # step fails. Run it as often as you like.
 #
-#   ssh minibook hid-emergency-unlock
+#   ssh <this-machine> input-lock-x-emergency-unlock
 
 set -u
 
-UNIT="minibookx-hid-lock.service"
-STATE="/run/minibookx-hid-lock.state"
+UNIT="input-lock-x.service"
+STATE="/run/input-lock-x.state"
 # Anchored on the full install path, so an editor with the source file open or
-# a `journalctl ... hid-lock-daemon` is not mistaken for the daemon. Telling a
+# a `journalctl ... input-lock-x-daemon` is not mistaken for the daemon. Telling a
 # locked-out user "STILL RUNNING -- something is very wrong" when input is
 # actually fine is the worst possible lie.
-DAEMON='/usr/local/bin/hid-lock-daemon'
+DAEMON='/usr/local/bin/input-lock-x-daemon'
 
-# The path alone is not enough: `hid-toggle status` runs the very same binary
+# The path alone is not enough: `input-lock-x status` runs the very same binary
 # with --list. Killing that, or counting it as a stuck daemon, would make this
 # script report a failed recovery -- which now also aborts uninstall.sh. Only
 # instances that can actually hold a grab count.
@@ -35,7 +36,7 @@ daemon_pids() {
 }
 
 if [ "$(id -u)" -ne 0 ]; then
-    # `ssh host hid-emergency-unlock` gets no TTY, so a password prompt would
+    # `ssh host input-lock-x-emergency-unlock` gets no TTY, so a password prompt would
     # fail with "a terminal is required" -- in the one situation where this
     # script has to work. Try the passwordless path first, and if that is not
     # available say exactly what to run instead of dying on a prompt nobody
@@ -47,17 +48,17 @@ if [ "$(id -u)" -ne 0 ]; then
         exec sudo -n -- "$0" "$@"
     fi
     if [ ! -t 0 ]; then
-        echo "hid-emergency-unlock needs root, but sudo wants a password and" >&2
+        echo "input-lock-x-emergency-unlock needs root, but sudo wants a password and" >&2
         echo "this session has no terminal. Run install.sh to allow" >&2
         echo "passwordless use, or retry with:" >&2
         echo >&2
-        echo "    ssh -t <host> sudo hid-emergency-unlock" >&2
+        echo "    ssh -t <host> sudo input-lock-x-emergency-unlock" >&2
         exit 1
     fi
     exec sudo -- "$0" "$@"
 fi
 
-echo "== Minibook X emergency HID unlock =="
+echo "== Input Lock X emergency unlock =="
 
 echo "-- stopping ${UNIT}"
 systemctl stop "$UNIT" 2>&1 || echo "   (systemctl stop failed, continuing)"
@@ -122,7 +123,7 @@ if [ "$inhibited" -ne 0 ]; then
 fi
 echo
 
-# Exit status has to be honest: `ssh laptop hid-emergency-unlock && echo ok`
+# Exit status has to be honest: `ssh laptop input-lock-x-emergency-unlock && echo ok`
 # must not print ok after a failed recovery, and uninstall.sh relies on this to
 # refuse to start deleting things while a lock is still held.
 if [ "$failed" -ne 0 ]; then

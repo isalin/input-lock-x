@@ -1,11 +1,11 @@
 [Unit]
-Description=Minibook X HID lock (grabs internal keyboard and touchpad)
-Documentation=https://github.com/isalin/minibookx-input-toggle
+Description=Input Lock X (grabs the internal keyboard and touchpad)
+Documentation=https://github.com/isalin/input-lock-x
 
 [Service]
 # notify, not simple: the daemon signals READY=1 only once the devices are
 # actually grabbed. With Type=simple, systemd reports the start job complete at
-# fork, so `hid-toggle on` and the extension would both confirm a lock that had
+# fork, so `input-lock-x on` and the extension would both confirm a lock that had
 # in fact exited with "no input devices matched".
 Type=notify
 NotifyAccess=main
@@ -13,9 +13,9 @@ NotifyAccess=main
 # for which there is no domain transition, so the service would stay in init_t
 # and get EACCES opening /dev/input/event* -- even as root. bin_t transitions
 # to unconfined_service_t, which can read input devices.
-ExecStart=/usr/local/bin/hid-lock-daemon
+ExecStart=/usr/local/bin/input-lock-x-daemon
 # Guarantees the state file is gone even if the daemon was SIGKILLed.
-ExecStopPost=/usr/bin/rm -f /run/minibookx-hid-lock.state
+ExecStopPost=/usr/bin/rm -f /run/input-lock-x.state
 # Deliberately no restart: a crash-looping daemon that keeps re-grabbing the
 # keyboard is the one failure mode we must never have.
 Restart=no

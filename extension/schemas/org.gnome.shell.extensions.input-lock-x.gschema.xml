@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.input-lock-x"
+          path="/org/gnome/shell/extensions/input-lock-x/">
+
+    <!-- Key name kept from the pre-rename schema on purpose: install.sh
+         migrates the old binding across by dconf path, and a key rename would
+         add a second thing that can go wrong for no user-visible gain. -->
+    <key name="toggle-hid" type="as">
+      <default><![CDATA[['<Control>Escape']]]></default>
+      <summary>Engage the keyboard and touchpad lock</summary>
+      <description>
+        Shortcut that engages the lock. It does not release it: once the lock
+        is on, the daemon holds an exclusive grab and the shell never sees the
+        keyboard at all, so no shell keybinding can fire. The daemon watches
+        its own grabbed stream for Ctrl+Esc and releases on that. Ctrl+Esc is
+        fixed and not configurable, deliberately -- it is the escape hatch, and
+        a rebindable escape hatch can be rebound into a lockout.
+      </description>
+    </key>
+
+  </schema>
+</schemalist>

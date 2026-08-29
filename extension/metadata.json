@@ -1,10 +1,16 @@
 {
-  "name": "Minibook X Input Toggle",
-  "description": "Panel button and Ctrl+Esc shortcut that disable the internal keyboard and touchpad, to stop accidental input in yoga/tablet mode. The touchscreen stays live so you can always tap the icon to re-enable.",
-  "uuid": "minibookx-input-toggle@isalin.github.com",
-  "settings-schema": "org.gnome.shell.extensions.minibookx-input-toggle",
+  "name": "Input Lock X",
+  "description": "Panel button and Ctrl+Esc shortcut that disable the internal keyboard and touchpad, to stop accidental input in yoga/tablet mode. The touchscreen stays live so you can always tap the icon to re-enable.\n\nRequires a companion root daemon, installed separately from https://github.com/isalin/input-lock-x -- a GNOME extension cannot open /dev/input itself. Without it the panel icon says so instead of failing silently.",
+  "uuid": "input-lock-x@isalin.github.io",
+  "settings-schema": "org.gnome.shell.extensions.input-lock-x",
+  "url": "https://github.com/isalin/input-lock-x",
   "session-modes": ["user"],
   "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
     "50"
   ]
 }
