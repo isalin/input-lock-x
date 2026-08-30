@@ -1,4 +1,5 @@
 # Input Lock X
+<img width="1920" height="1200" alt="input-toggle-x" src="https://github.com/user-attachments/assets/bea52769-1382-4caf-9dfc-00633bf47d86" />
 
 Input Lock X is an open-source GNOME Shell extension for Linux that temporarily
 disables a convertible laptop's built-in keyboard and touchpad in tablet mode.
@@ -13,7 +14,7 @@ without accidental input. It supports GNOME Shell 45–50 on Wayland and X11.
 - The touchscreen stays available in auto mode, so the panel icon remains usable.
 - Notifications show when input is disabled or enabled.
 
-The project was written on a Chuwi Minibook X, but device selection is based on
+The project was written on a Chuwi Minibook X running Fedora, but device selection is based on
 evdev capabilities rather than a list of machine-specific names.
 
 > **Warning:** this installs a root service and can disable every input device
