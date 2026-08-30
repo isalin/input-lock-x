@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
 # Passwordless input lock control for administrators.
 #
 # Installed to /etc/sudoers.d/input-lock-x (mode 0440), and validated with

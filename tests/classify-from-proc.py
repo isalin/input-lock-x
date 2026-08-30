@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# Copyright (C) 2026 Isak Lindgren
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Drive the real classifier with bitmaps from /proc/bus/input/devices.
 

@@ -1,5 +1,12 @@
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
 # Everything the current generation of this tool installs.
 # shellcheck shell=bash
+#
+# Every name below is read by the script that sources this file, never by this
+# file itself -- which is precisely what SC2034 cannot see across a `source`.
+# shellcheck disable=SC2034
 #
 # Sourced by both install.sh and uninstall.sh, for the same reason
 # lib/legacy-paths.sh exists: the failure mode of two lists is a root-owned
@@ -40,3 +47,33 @@ FILES=(
     "$UNLOCK"
     "$DAEMON_BIN"
 )
+
+# What is at $EXT_DIR:
+#
+#   absent   nothing at that path
+#   symlink  a symlink, whose target still needs to be checked before it is
+#            treated as belonging to this checkout
+#   foreign  a real directory somebody else installed
+#
+# Shared rather than written out twice, because the two scripts disagreeing
+# about the path is how somebody else's extension disappears.
+ext_state() {
+    if [[ -L "$EXT_DIR" ]]; then
+        echo "symlink"
+    elif [[ -e "$EXT_DIR" ]]; then
+        echo "foreign"
+    else
+        echo "absent"
+    fi
+}
+
+# True when $EXT_DIR is a symlink resolving into the given checkout -- i.e. the
+# shell loads *this* copy, so this is the tree whose schema has to be compiled.
+#
+# Deliberately not folded into ext_state: a symlink into a second clone, or one
+# left dangling because its target was removed, is not proof that this checkout
+# owns it. Only a link that resolves to this checkout may be removed silently
+# by uninstall.sh; every other symlink is treated as somebody else's path.
+ext_links_to_repo() {  # ext_links_to_repo <repo-root>
+    [[ -L "$EXT_DIR" && "$(readlink -f "$EXT_DIR")" == "$1/extension" ]]
+}

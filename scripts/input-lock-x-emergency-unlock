@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026 Isak Lindgren
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Unconditionally restore keyboard and touchpad input.
 #
@@ -21,18 +22,32 @@ DAEMON='/usr/local/bin/input-lock-x-daemon'
 # The path alone is not enough: `input-lock-x status` runs the very same binary
 # with --list. Killing that, or counting it as a stuck daemon, would make this
 # script report a failed recovery -- which now also aborts uninstall.sh. Only
-# instances that can actually hold a grab count.
+# instances that can actually hold a grab count. Scan /proc directly rather
+# than depending on pgrep: procps is not guaranteed by the minimal dependency
+# set, and an absent pgrep must not turn an orphaned grab into a false success.
 daemon_pids() {
-    for p in $(pgrep -f "$DAEMON" 2>/dev/null); do
+    for dir in /proc/[0-9]*; do
+        p=${dir#/proc/}
         [ "$p" = "$$" ] && continue
-        # The process may have exited between pgrep and here; guard the
-        # redirect rather than let the shell complain about it.
-        [ -r "/proc/$p/cmdline" ] || continue
-        if tr '\0' ' ' <"/proc/$p/cmdline" | grep -q -- '--list'; then
-            continue
-        fi
-        echo "$p"
+        # The process can exit between the glob and the read, and kernel
+        # threads have no cmdline at all. Either way, not a daemon.
+        [ -r "$dir/cmdline" ] || continue
+        # Put stderr on /dev/null before the input redirect: if the process
+        # disappears between the checks, the shell's failed redirect is quiet.
+        cmdline="$(tr '\0' ' ' 2>/dev/null <"$dir/cmdline")" || continue
+        case "$cmdline" in
+            *"$DAEMON"*) ;;
+            *) continue ;;
+        esac
+        case "$cmdline" in
+            *--list*) continue ;;
+        esac
+        printf '%s\n' "$p"
     done
+
+    # Callers assign this in a command substitution under `set -e`; a scan
+    # with no matches must still be a successful scan.
+    return 0
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -67,6 +82,7 @@ pids="$(daemon_pids)"
 if [ -n "$pids" ]; then
     echo "-- daemon still running, sending TERM"
     # Unquoted on purpose: one kill for the whole pid list.
+    # shellcheck disable=SC2086
     kill $pids 2>/dev/null || true
     # Give it a moment to release its grabs cleanly before escalating.
     i=0
@@ -77,6 +93,8 @@ if [ -n "$pids" ]; then
     pids="$(daemon_pids)"
     if [ -n "$pids" ]; then
         echo "-- daemon ignored TERM, sending KILL"
+        # Unquoted for the same reason as the TERM above.
+        # shellcheck disable=SC2086
         kill -9 $pids 2>/dev/null || true
         # The kernel drops an EVIOCGRAB when the fd closes, so a KILL still
         # restores input.

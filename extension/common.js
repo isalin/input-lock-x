@@ -1,4 +1,5 @@
 /* Input Lock X -- shared between extension.js and prefs.js
+ * Copyright (C) 2026 Isak Lindgren
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * The panel button and the preferences page both need to know what the unit is

@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026 Isak Lindgren
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Control the input lock from a shell, including over SSH.
 #
@@ -17,13 +18,14 @@ DAEMON_BIN="/usr/local/bin/input-lock-x-daemon"
 
 # The help text is the comment block at the top of this file. Extracted by
 # shape rather than by line number: adding the SPDX line above already forced
-# this from '2,9p' to '3,10p' once, and neither `sh -n` nor `make check` can
-# catch a window that has slid. install.sh carries the same awk verbatim.
+# this from '2,9p' to '3,10p' once, the copyright line would have forced it
+# again, and neither `sh -n` nor `make check` can catch a window that has slid.
+# install.sh carries the same awk verbatim.
 usage() {
     awk 'NR == 1 { next }
          /^#/ {
              sub(/^# ?/, "")
-             if ($0 !~ /^SPDX-License-Identifier:/)
+             if ($0 !~ /^(SPDX-License-Identifier:|Copyright )/)
                  print
              next
          }

@@ -1,3 +1,8 @@
+/* Input Lock X
+ * Copyright (C) 2026 Isak Lindgren
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 /* Locked state has to be readable at arm's length, held as a tablet, so it
  * changes both shape (icon) and colour rather than relying on either alone. */
 .input-lock-x-toggle.input-lock-x-locked {

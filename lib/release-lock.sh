@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
 # Make certain nothing is still holding an EVIOCGRAB on this machine's input.
 # shellcheck shell=bash
 #

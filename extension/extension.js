@@ -1,4 +1,5 @@
 /* Input Lock X
+ * Copyright (C) 2026 Isak Lindgren
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Adds a panel button and a Ctrl+Esc shortcut that lock the internal keyboard

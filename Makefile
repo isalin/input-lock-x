@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 UUID := input-lock-x@isalin.github.io
 EXT_DIR := $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
 BUILD := build
@@ -14,14 +17,16 @@ help:
 	@echo "make logs            follow the daemon journal"
 	@echo "make unlock          emergency release"
 	@echo "make check           syntax-check the daemon, scripts and extension"
-	@echo "make test            run the classifier against this machine, no root needed"
+	@echo "make test            run offline tests and the classifier, no root needed"
 	@echo "make pack            build the extensions.gnome.org zip"
 
 install:
 	@./install.sh
 
-# For a machine whose extension came from extensions.gnome.org: installs the
-# daemon and never touches ~/.local/share/gnome-shell/extensions.
+# For a machine whose extension was installed by something other than this
+# script: installs the daemon and never installs, replaces or removes the
+# extension. If this checkout is already symlinked into place it does rebuild
+# the compiled schema there -- see --daemon-only in ./install.sh --help.
 install-daemon:
 	@./install.sh --daemon-only
 
@@ -45,19 +50,32 @@ unlock:
 check:
 	@python3 -m py_compile daemon/input-lock-x-daemon.py && echo "daemon: ok"
 	@python3 -m py_compile tests/classify-from-proc.py && echo "tests: ok"
+	@python3 -m py_compile tests/test_daemon.py && echo "unit tests: ok"
 	@sh -n scripts/input-lock-x && echo "input-lock-x: ok"
 	@sh -n scripts/input-lock-x-emergency-unlock && echo "input-lock-x-emergency-unlock: ok"
 	@bash -n install.sh && echo "install.sh: ok"
 	@bash -n uninstall.sh && echo "uninstall.sh: ok"
 	@bash -n lib/output.sh && echo "lib/output.sh: ok"
+	@bash -n lib/usage.sh && echo "lib/usage.sh: ok"
 	@bash -n lib/paths.sh && echo "lib/paths.sh: ok"
 	@bash -n lib/legacy-paths.sh && echo "lib/legacy-paths.sh: ok"
 	@bash -n lib/release-lock.sh && echo "lib/release-lock.sh: ok"
+	@bash -n tests/test-path-ownership.sh && echo "path ownership test: ok"
 	@# Optional: shellcheck catches the set -e and quoting traps `sh -n` cannot.
+	@# No -S: the tree is clean at the default severity, which includes style
+	@# and info, and the two places that genuinely want an unquoted expansion
+	@# carry an inline `shellcheck disable` saying so. Raising the floor to
+	@# warning would hide the next SC2086 that is not deliberate.
+	@# Optional locally, but .github/workflows/check.yml always has it -- at a
+	@# pinned version, so that a shellcheck upgrade cannot fail a commit that
+	@# changed no shell code. A machine without it cannot land something CI
+	@# would reject.
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -S warning install.sh uninstall.sh \
-			lib/output.sh lib/paths.sh lib/legacy-paths.sh lib/release-lock.sh \
+		shellcheck install.sh uninstall.sh \
+			lib/output.sh lib/usage.sh lib/paths.sh lib/legacy-paths.sh \
+			lib/release-lock.sh \
 			scripts/input-lock-x scripts/input-lock-x-emergency-unlock \
+			tests/test-path-ownership.sh \
 			&& echo "shellcheck: ok"; \
 	else \
 		echo "shellcheck: not installed, skipped"; \
@@ -81,10 +99,13 @@ check:
 	@python3 -c "import json,sys; json.load(open('extension/metadata.json'))" && echo "metadata.json: ok"
 	@glib-compile-schemas --dry-run extension/schemas/ && echo "schema: ok"
 
-# Reads /proc/bus/input/devices instead of opening evdev nodes, so this runs as
+# The unit tests are all offline. The final classifier reads
+# /proc/bus/input/devices instead of opening evdev nodes, so this target runs as
 # a normal user -- the point being to check what auto mode would grab on a new
 # machine before handing it the keyboard.
 test:
+	@python3 -m unittest discover -s tests -p 'test_*.py'
+	@bash tests/test-path-ownership.sh
 	@python3 tests/classify-from-proc.py
 
 # Built from a staging copy so gschemas.compiled -- which a local `make schemas`

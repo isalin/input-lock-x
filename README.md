@@ -18,9 +18,12 @@ Python 3 (stdlib only). Tested on Fedora; the packaging is distro-neutral.
 
 **This repository is two halves.** The GNOME extension is the UI; the actual
 locking is done by a small root daemon, because a shell extension cannot open
-`/dev/input`. Installing only the extension from extensions.gnome.org gives you
-a panel icon that says the daemon is missing. Run `./install.sh` from here to
-get the working thing.
+`/dev/input`. Both halves install together with `./install.sh` — see
+[Install](#install) for the step-by-step.
+
+Not on extensions.gnome.org: the extension alone would give you a panel icon
+that can say only that the daemon is missing, so both halves ship from here
+until that is worth splitting up.
 
 ---
 
@@ -71,23 +74,155 @@ unlock screen does not render extension-provided panel items.
 
 ## Install
 
+Everything ships from this repository — the extension is not on
+extensions.gnome.org, so this is the only way in. Six steps, about five
+minutes, one of which is a logout.
+
+> **Open an SSH session from another machine first.**
+> `ssh <this-laptop>` from a desktop, another laptop, or a phone. Everything
+> here is designed to be recoverable, but the first time you find out whether
+> your hardware is detected correctly is a good moment to already have a way
+> in. Keep it open until step 6 has passed.
+
+### 1. Install the prerequisites
+
+A GNOME desktop already has systemd, polkit, sudo, awk and `/usr/bin/python3`.
+What is usually missing is `git`, `make` and `glib-compile-schemas`:
+
 ```sh
-./install.sh      # or: make install
+sudo dnf install git make glib2-devel        # Fedora, RHEL
+sudo apt install git make libglib2.0-bin     # Debian, Ubuntu
+sudo pacman -S git make glib2                # Arch
+sudo zypper install git make glib2-devel     # openSUSE
 ```
 
-Then **log out and back in** — Wayland cannot load a new extension in place.
+No Python packages are needed — the daemon is stdlib only, so there is no
+`python3-evdev` or virtualenv anywhere in this.
 
-The installer symlinks the extension rather than copying it, so edits in this
-repo go live on the next login. It checks its prerequisites up front and names
-what is missing, installs the daemon and unit under `sudo`, and finishes by
-starting the unit for real — briefly locking and unlocking — because that is
-the only check that proves the service can actually grab.
+### 2. Clone the repository
 
-**Do the first install with an SSH session already open from another machine.**
-Everything here is designed to be recoverable, but the first time you find out
-whether your hardware is detected correctly is a good moment to have a way in.
+```sh
+git clone https://github.com/isalin/input-lock-x.git
+cd input-lock-x
+```
 
-### If you installed the extension from extensions.gnome.org
+**Clone it somewhere permanent** — `~/src`, `~/git`, anywhere you will not tidy
+away later. The installer *symlinks* this directory into
+`~/.local/share/gnome-shell/extensions` rather than copying it, so moving the
+checkout afterwards leaves the extension pointing at nothing until you re-run
+`./install.sh` from the new location. The installer shows the old symlink and
+asks before repointing it; deleting the checkout breaks the extension outright.
+That is the trade for edits here going live on the next login.
+
+### 3. Check what would get locked, before anything is installed
+
+```sh
+make test
+```
+
+This classifies every input device on the machine by reading
+`/proc/bus/input/devices`. No root, nothing installed, nothing touched. Each
+device is printed as `GRAB` (would be locked) or `skip` (left alone), and the
+last two lines are the ones that matter:
+
+```
+escape routes: ['the touchscreen (tap the panel icon)']
+
+2 device(s) would be grabbed: ['AT Translated Set 2 keyboard', '... Touchpad']
+```
+
+Your internal keyboard and touchpad should be in the grab list, and your
+touchscreen should not. If something you rely on is in the wrong column, carry
+on — you can fix it in `/etc/input-lock-x.conf` after step 4. See
+[Which devices get locked](#which-devices-get-locked).
+
+### 4. Run the installer
+
+```sh
+./install.sh          # or: make install
+```
+
+It asks for your sudo password once. In order it:
+
+- checks every prerequisite and names anything missing, before changing
+  anything;
+- symlinks `extension/` into `~/.local/share/gnome-shell/extensions` and
+  compiles the GSettings schema;
+- installs the daemon, systemd unit, polkit rule, sudoers drop-in and the two
+  CLI scripts under `sudo`;
+- **starts the unit for real** — briefly locking and unlocking your input —
+  because that is the only check that proves the service can actually grab;
+- and enables the extension last, once the unit is known to work.
+
+It exits non-zero and says which step failed if any of that goes wrong. It is
+safe to re-run, and `/etc/input-lock-x.conf` is never overwritten once it
+exists.
+
+### 5. Log out and back in
+
+**This step is required.** Wayland cannot load a new extension in place, and
+the extension only reached the disk seconds ago. Logging out is enough — no
+reboot.
+
+The daemon half is already live at this point: `input-lock-x on` works from a
+terminal right now. It is the panel icon and the shortcut that are not there
+until the shell restarts.
+
+### 6. Verify
+
+After logging back in there should be a **keyboard icon** in the top right —
+not a yellow warning triangle, which means the shell cannot find the daemon
+(see [Troubleshooting](#troubleshooting)). Confirm from a terminal:
+
+```sh
+gnome-extensions info input-lock-x@isalin.github.io
+#   Enabled: Yes
+#   State: ACTIVE
+
+input-lock-x status
+#   lock:       released
+#   unit:       inactive
+```
+
+Then test the real round trip, using the SSH session from the top:
+
+```sh
+ssh <this-laptop> input-lock-x on
+```
+
+The laptop's keyboard and touchpad go dead and the panel icon turns red. Press
+**Ctrl+Esc** on the laptop itself — they come back. If they do not:
+
+```sh
+ssh <this-laptop> input-lock-x-emergency-unlock
+```
+
+Once that round trip works you can trust the panel icon, and the SSH session
+has done its job.
+
+### Updating
+
+```sh
+git -C /path/to/input-lock-x pull
+./install.sh
+```
+
+Run both. The extension is a symlink, so a `pull` updates its *source* on the
+next login — but `extension/schemas/gschemas.compiled` is a build artefact,
+gitignored and never pulled. If the release changed a settings key, that file
+is now stale, and a stale compiled schema is what makes `getSettings()` throw
+and takes the panel icon and the shortcut with it. `install.sh` rebuilds it,
+and refreshes the daemon, unit and scripts in `/usr/local/bin` and `/etc`,
+which are copies rather than symlinks.
+
+`./install.sh --daemon-only` rebuilds the schema too, if you would rather it
+left the extensions directory otherwise untouched.
+
+### If something else already installed the extension
+
+Not a case you can reach today — the extension is only published here — but the
+installer handles it, and this is what happens the day it also lands on
+extensions.gnome.org.
 
 Run the same installer — it works out the rest:
 
@@ -113,8 +248,8 @@ so edits here do nothing until you ask for the symlink explicitly.
 | Flag | Effect |
 | --- | --- |
 | `--no-sudoers` | skip the passwordless sudo drop-in; see [Sudo and admin groups](#sudo-and-admin-groups) |
-| `--daemon-only` | never touch `~/.local/share/gnome-shell/extensions` at all, whatever is or is not there |
-| `--link-extension` | replace whatever is at the extension path with a symlink to this checkout, even if something else installed it |
+| `--daemon-only` | never install, replace or remove the extension, and never change whether it is enabled. If this checkout is already symlinked into place it still rebuilds the compiled schema there — the one file it writes under `~/.local/share/gnome-shell/extensions`, and the one whose staleness breaks the panel icon |
+| `--link-extension` | replace whatever is at the extension path with a symlink to this checkout, even if something else installed it. Asks before deleting a directory or repointing a symlink it did not create, and refuses when there is no terminal to ask at |
 
 ## Uninstall
 
@@ -125,10 +260,11 @@ so edits here do nothing until you ask for the symlink explicitly.
 It releases any active lock before removing anything, and cleans up both the
 current and the pre-rename generation of files.
 
-It removes only what `install.sh` put there. An extension installed from
-extensions.gnome.org is left in place — still installed, still enabled, its
-shortcut setting intact — and only shows the "daemon not installed" icon.
-Remove it from the Extensions app, or with:
+It removes only an extension symlink that resolves to this checkout. A real
+directory (the Extensions app, an unpacked zip), or a symlink that belongs to
+another checkout or installer, is left in place — still installed, still
+enabled, its shortcut setting intact — and only shows the "daemon not
+installed" icon. Remove it from the Extensions app, or with:
 
 ```sh
 gnome-extensions uninstall input-lock-x@isalin.github.io
@@ -376,9 +512,10 @@ group or edit the group list in the polkit rule.
 
 | Path | Purpose |
 | --- | --- |
-| `extension/` | GNOME Shell extension, symlinked to `~/.local/share/gnome-shell/extensions/input-lock-x@isalin.github.io` unless a copy from extensions.gnome.org is already there |
+| `extension/` | GNOME Shell extension, symlinked to `~/.local/share/gnome-shell/extensions/input-lock-x@isalin.github.io` unless something else already installed a copy there |
 | `extension/common.js` | unit name and the installed-check, shared by `extension.js` and `prefs.js` |
-| `lib/output.sh` | `say`, `warn` and the boxed warning, shared by `install.sh` and `uninstall.sh` |
+| `lib/output.sh` | `say`, `warn`, the boxed warning and the `confirm` prompt, shared by `install.sh` and `uninstall.sh` |
+| `lib/usage.sh` | `--help` text, extracted from the calling script's own header |
 | `lib/paths.sh` | every path this installs, shared by `install.sh` and `uninstall.sh` |
 | `lib/legacy-paths.sh` | the pre-rename paths, shared by `install.sh` and `uninstall.sh` |
 | `lib/release-lock.sh` | release any active grab, shared by `install.sh` and `uninstall.sh` |
@@ -390,11 +527,18 @@ group or edit the group list in the polkit rule.
 | `scripts/input-lock-x` | `on` / `off` / `toggle` / `status` → `/usr/local/bin/` |
 | `scripts/input-lock-x-emergency-unlock` | unconditional recovery → `/usr/local/bin/` |
 | `tests/classify-from-proc.py` | run the classifier against `/proc`, no root needed |
+| `tests/test_daemon.py` | offline unit tests for classification and config parsing |
+| `tests/test-path-ownership.sh` | offline symlink-ownership smoke test |
+| `.github/workflows/check.yml` | runs `make check` and `make test` on every push and pull request |
 
 Stdlib Python 3 only — no `python3-evdev` or other new system packages.
 
-`make check` syntax-checks everything; `make pack` builds the
-extensions.gnome.org zip.
+`make check` syntax-checks and lints everything; `make test` runs the offline
+unit and path-ownership tests before classifying the real machine's devices;
+`make pack` builds the extensions.gnome.org zip. Locally `make check` treats
+`shellcheck` and `node` as optional and prints "not installed, skipped" when
+they are absent — CI asserts both are present before running it, so a skip
+cannot hide a finding.
 
 ---
 
@@ -408,8 +552,9 @@ gnome-extensions info input-lock-x@isalin.github.io
 ```
 
 **The panel icon is a yellow warning triangle.** The daemon is not installed —
-the extension found no `input-lock-x.service`. This is what installing only the
-extension from extensions.gnome.org looks like. Run `./install.sh` from this
+the extension found no `input-lock-x.service`. This is what the extension half
+on its own looks like, and what you would see if the daemon were uninstalled
+while the extension was left in place. Run `./install.sh` from this
 repository.
 
 **The shortcut does nothing.** If the panel icon is the warning triangle, that
@@ -466,4 +611,15 @@ gnome-extensions disable rotation-hid-lock@isalin.github.com
 
 ## Licence
 
-GPL-2.0-or-later. See [LICENSE](LICENSE).
+Copyright (C) 2026 Isak Lindgren.
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2 of the License, or (at your option) any later
+version.
+
+It is distributed in the hope that it will be useful, but **without any
+warranty** — without even the implied warranty of merchantability or fitness
+for a particular purpose. See the [LICENSE](LICENSE) file for the full text.
+
+Every source file carries `SPDX-License-Identifier: GPL-2.0-or-later`.

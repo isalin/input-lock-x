@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
 [Unit]
 Description=Input Lock X (grabs the internal keyboard and touchpad)
 Documentation=https://github.com/isalin/input-lock-x

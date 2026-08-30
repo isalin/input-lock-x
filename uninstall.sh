@@ -1,8 +1,13 @@
 #!/bin/bash
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Remove everything install.sh put in place, from either generation of names.
 #
 # Releases any active lock first, so it is impossible to uninstall yourself
 # into a dead keyboard.
+#
+# Usage: ./uninstall.sh
+#   No options. -h/--help prints this and does nothing else.
 
 set -euo pipefail
 
@@ -15,7 +20,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # All four helpers are shared with install.sh so the two can never drift apart
 # -- on the release path in particular, a disagreement means a dead keyboard
 # and a deleted recovery script.
-for helper in output paths legacy-paths release-lock; do
+for helper in output usage paths legacy-paths release-lock; do
     if [[ ! -r "$REPO/lib/$helper.sh" ]]; then
         echo "missing $REPO/lib/$helper.sh -- run this from a full checkout" >&2
         exit 1
@@ -23,12 +28,24 @@ for helper in output paths legacy-paths release-lock; do
 done
 # shellcheck source=lib/output.sh
 source "$REPO/lib/output.sh"
+# shellcheck source=lib/usage.sh
+source "$REPO/lib/usage.sh"
 # shellcheck source=lib/paths.sh
 source "$REPO/lib/paths.sh"
 # shellcheck source=lib/legacy-paths.sh
 source "$REPO/lib/legacy-paths.sh"
 # shellcheck source=lib/release-lock.sh
 source "$REPO/lib/release-lock.sh"
+
+# Parsed even though there are no options to parse: without this loop
+# `./uninstall.sh --help` fell straight through to the uninstall and removed
+# everything, which is a spectacular answer to a request for documentation.
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown option: $arg (try --help)" >&2; exit 1 ;;
+    esac
+done
 
 if [[ $EUID -eq 0 ]]; then
     echo "Run this as your normal user; it will call sudo where it needs to." >&2
@@ -55,23 +72,22 @@ if ! release_lock "$LEGACY_UNIT" "$LEGACY_STATE" "$LEGACY_UNLOCK" \
 fi
 echo "   released"
 
-# install.sh only ever puts a symlink at $EXT_DIR, so a symlink is ours and
-# anything else belongs to whoever did install it -- the Extensions app, or a
-# zip from extensions.gnome.org. Deleting that would be uninstalling something
-# this script never installed, on the strength of a matching directory name.
-EXT_WAS_OURS=0
-if [[ -L "$EXT_DIR" ]]; then
-    EXT_WAS_OURS=1
-fi
+# The same predicate install.sh uses, from the same file, so this removes only
+# a symlink that resolves to this checkout. A symlink by itself is not proof of
+# ownership: it may belong to another checkout or another tool, and it may be
+# dangling.
+EXT_STATE="$(ext_state)"
+EXT_REMOVED=0
 
-if [[ $EXT_WAS_OURS -eq 1 ]]; then
+if ext_links_to_repo "$REPO"; then
     say "Disabling the extension"
     gnome-extensions disable "$UUID" 2>/dev/null || true
     # Plain -f: the branch guarantees a symlink, and rm removes the link rather
     # than following it, so the checkout it points at is untouched.
     rm -f "$EXT_DIR"
     echo "   removed $EXT_DIR"
-elif [[ -e "$EXT_DIR" ]]; then
+    EXT_REMOVED=1
+elif [[ "$EXT_STATE" == foreign ]]; then
     say "Leaving the installed extension alone"
     warn_box \
         "This script did not install the extension at:" \
@@ -86,6 +102,16 @@ elif [[ -e "$EXT_DIR" ]]; then
         "To remove it, use the Extensions app, or:" \
         "" \
         "    gnome-extensions uninstall $UUID"
+elif [[ "$EXT_STATE" == symlink ]]; then
+    say "Leaving the extension symlink alone"
+    warn_box \
+        "This symlink does not resolve to this checkout:" \
+        "" \
+        "    $EXT_DIR" \
+        "      -> $(readlink "$EXT_DIR")" \
+        "" \
+        "It may belong to another checkout or another installer, so it has" \
+        "been left alone. Remove it or uninstall its owner separately."
 fi
 
 # Unconditional, unlike the above: the pre-rename installer only ever made its
@@ -114,9 +140,11 @@ echo "   done"
 # a stray key referring to an extension that is no longer installed -- but only
 # when the extension really is gone. One we left in place is still using that
 # key, and resetting it would silently change a setting on somebody else's
-# install. The pre-rename path always goes: its extension always does.
+# install. So reset it when the path was absent or when we removed our own
+# symlink. An unknown symlink and a foreign directory keep their settings.
+# The pre-rename path always goes: its extension always does.
 if command -v dconf >/dev/null 2>&1; then
-    if [[ $EXT_WAS_OURS -eq 1 ]]; then
+    if [[ "$EXT_STATE" == absent || $EXT_REMOVED -eq 1 ]]; then
         dconf reset -f "$DCONF_PATH" 2>/dev/null || true
         echo "   shortcut setting cleared"
     fi

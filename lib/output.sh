@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
 # Terminal output shared by install.sh and uninstall.sh.
 # shellcheck shell=bash
 #
@@ -7,11 +10,15 @@
 # extension their shell is actually loading, and it is worth nothing if it
 # scrolls past looking like progress output.
 
-# Colour only when someone is there to see it. `./install.sh | tee log` and
-# `ssh host ./install.sh` both leave stdout a pipe, and escape codes in a log
-# file outlive the install. NO_COLOR is the de-facto opt-out (no-color.org);
-# TERM=dumb is what emacs shell-mode and some CI runners set.
-if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb ]]; then
+# Colour only when someone is there to see it, and -t 2 rather than -t 1
+# because every escape code below is written to fd 2: the two users of _C_WARN
+# are warn() and warn_box(), both stderr-only. Testing stdout got both cases
+# backwards -- `./install.sh 2>install.log` from a terminal wrote raw escapes
+# into the log this check exists to keep clean, while `./install.sh | tee log`
+# stripped the colour off warnings that were still going to the terminal.
+# NO_COLOR is the de-facto opt-out (no-color.org); TERM=dumb is what emacs
+# shell-mode and some CI runners set.
+if [[ -t 2 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb ]]; then
     _C_WARN=$'\033[1;33m'   # bold yellow -- orange on most terminal palettes
     _C_OFF=$'\033[0m'
 else
@@ -70,4 +77,33 @@ warn_box() {
         fi
     done
     printf '%s%s\n' "$rule" "$_C_OFF" >&2
+}
+
+# A yes/no gate in front of something destructive. True only on a typed "yes".
+#
+# Reads /dev/tty, not stdin: `./install.sh </dev/null` from a terminal should
+# still ask, and a heredoc or a pipe on stdin must never be able to answer on
+# the user's behalf. When there is no terminal at all -- cron, a provisioning
+# script, `ssh host ./install.sh` with no -t -- this refuses rather than
+# assuming consent, so an unattended run cannot delete somebody else's install.
+#
+# `|| true` on the read: EOF (Ctrl-D, or a tty that closes) is a refusal, not a
+# crash. Under `set -e` a bare failing read aborts the whole script before the
+# caller's own "aborted" message can print, which looks exactly like dying
+# halfway through an rm.
+confirm() {  # confirm <prompt>
+    local reply=""
+    # Probed by opening it in a subshell, not with `-r`: /dev/tty exists and
+    # tests readable even in a session with no controlling terminal, where the
+    # open then fails with ENXIO. The subshell absorbs both the failure and the
+    # error message bash prints for a failed redirection.
+    if ! (exec 3</dev/tty) 2>/dev/null; then
+        return 1
+    fi
+    printf '%s' "$1" >&2
+    exec 3</dev/tty
+    read -r reply <&3 || true
+    exec 3<&-
+    printf '\n' >&2
+    [[ "$reply" == yes ]]
 }

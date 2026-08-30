@@ -1,0 +1,97 @@
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Runs `make check` and the offline test suite on every push and pull request.
+#
+# The point of doing it here rather than trusting a local run: `make check`
+# treats shellcheck and node as optional and prints "not installed, skipped"
+# when they are absent, so a clean local run can prove less than it looks.
+# This job asserts both are present before running it, which makes those skip
+# branches unreachable -- so the shell scripts, the code that runs under sudo
+# and writes to /etc, are actually linted on every commit.
+#
+# Nothing here needs root, a session bus, or input devices: `make check` is
+# syntax, lint and schema validation, and `make test` is offline unit testing
+# plus a read-only /proc classifier. Neither target installs the daemon, starts
+# the unit, or touches any input device.
+#
+# `make pack` is deliberately not run here. It needs the `gnome-extensions`
+# tool, which on Ubuntu means pulling in gnome-shell itself -- a large and
+# fragile dependency for a repository that ships from GitHub. Build the
+# extensions.gnome.org zip locally with `make pack` when that day comes.
+
+name: check
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    # Job-level so the pin is written once. Two copies, one per step, is a
+    # version that can drift against the checksum beside it.
+    env:
+      SHELLCHECK_VERSION: v0.10.0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # glib-compile-schemas is the only one not already on the runner image.
+      - name: Install glib-compile-schemas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libglib2.0-bin
+
+      # Pinned, not the runner image's copy. `make check` runs shellcheck at
+      # its default severity, which includes style and info -- so a shellcheck
+      # upgrade under ubuntu-latest can add a diagnostic and fail a commit that
+      # changed no shell code at all. Worse, `pack` depends on `check`, so that
+      # would also stop the release zip building. Bump this deliberately.
+      - name: Install pinned shellcheck
+        env:
+          SHELLCHECK_SHA256: 6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87
+        run: |
+          set -euo pipefail
+          url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL --retry 3 -o shellcheck.tar.xz "$url"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
+
+      # Asserted, not assumed. A silently missing tool would turn this job into
+      # a green tick that checked less than it claims to.
+      - name: Verify every checker make check can skip is present
+        run: |
+          set -euo pipefail
+          for tool in shellcheck node python3 awk glib-compile-schemas; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "::error::$tool is missing -- make check would skip it silently"
+              exit 1
+            fi
+            printf '%s: %s\n' "$tool" "$(command -v "$tool")"
+          done
+          # The pin is worth nothing if PATH resolves to the runner image's own
+          # shellcheck instead -- ubuntu-latest ships one in /usr/bin, and the
+          # step above installs to /usr/local/bin. Printing the version proves
+          # nothing; this compares it.
+          want="${SHELLCHECK_VERSION#v}"
+          got="$(shellcheck --version | awk '/^version:/ { print $2 }')"
+          if [ "$got" != "$want" ]; then
+            echo "::error::shellcheck on PATH is $got, expected the pinned $want"
+            exit 1
+          fi
+          echo "shellcheck: $got (pinned)"
+
+      - name: make check
+        run: make check
+
+      - name: make test
+        run: make test

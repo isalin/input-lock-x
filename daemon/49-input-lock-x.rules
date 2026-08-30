@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Isak Lindgren
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
 // Let an active local session in an administrator group start and stop the
 // input lock unit without a password prompt -- a password prompt is useless
 // when the keyboard is the thing being disabled.

@@ -1,4 +1,5 @@
 /* Input Lock X -- preferences
+ * Copyright (C) 2026 Isak Lindgren
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Two things a user cannot discover from the panel button: what the shortcut

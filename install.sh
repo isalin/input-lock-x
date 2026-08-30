@@ -1,21 +1,33 @@
 #!/bin/bash
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Install Input Lock X: the GNOME extension (user) plus the daemon, systemd
 # unit, polkit rule and CLI scripts (system, needs sudo).
 #
 # Safe to re-run. /etc/input-lock-x.conf is never overwritten.
 #
-# By default the extension is only linked in when nothing else has installed
-# it. A copy from extensions.gnome.org is left exactly where it is and only the
-# daemon goes in -- see --link-extension to override that.
+# The extension is installed as a symlink to this checkout. A re-run keeps only
+# a symlink that resolves to this checkout; any other symlink, including a
+# dangling one, is shown and requires confirmation before it is repointed.
+# A real directory somebody else installed is left alone -- see
+# --link-extension to override that.
 #
 # Usage: ./install.sh [--no-sudoers] [--daemon-only] [--link-extension]
 #   --no-sudoers      do not install the passwordless sudo drop-in. Recovery over
 #                     SSH then needs a TTY: ssh -t <host> sudo input-lock-x-emergency-unlock
 #   --daemon-only     install the daemon, unit, polkit rule and CLI only. Never
-#                     touches ~/.local/share/gnome-shell/extensions at all. Use
-#                     this when the extension came from extensions.gnome.org.
+#                     installs, replaces or removes the extension, and never
+#                     changes whether it is enabled. If this checkout is already
+#                     symlinked into place it does rebuild the compiled schema
+#                     there -- the only file it writes anywhere under
+#                     ~/.local/share/gnome-shell/extensions, and the one whose
+#                     staleness breaks the panel icon. Use this when the
+#                     extension was installed by something other than this script.
 #   --link-extension  replace whatever is at the extension path with a symlink
 #                     to this checkout, even if something else installed it.
+#                     Asks before deleting a directory or repointing a symlink
+#                     it did not create, and refuses when there is no terminal
+#                     to ask at.
 #                     For developing on the extension itself.
 
 set -euo pipefail
@@ -29,7 +41,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # Both sets of names, the release sequence and the warning formatting live in
 # files shared with uninstall.sh so the two can never disagree about any of
 # them.
-for helper in output paths legacy-paths release-lock; do
+for helper in output usage paths legacy-paths release-lock; do
     if [[ ! -r "$REPO/lib/$helper.sh" ]]; then
         echo "missing $REPO/lib/$helper.sh -- run this from a full checkout" >&2
         exit 1
@@ -37,6 +49,8 @@ for helper in output paths legacy-paths release-lock; do
 done
 # shellcheck source=lib/output.sh
 source "$REPO/lib/output.sh"
+# shellcheck source=lib/usage.sh
+source "$REPO/lib/usage.sh"
 # shellcheck source=lib/paths.sh
 source "$REPO/lib/paths.sh"
 # shellcheck source=lib/legacy-paths.sh
@@ -48,26 +62,10 @@ INSTALL_SUDOERS=1
 # auto: link only if nothing else owns the extension directory.
 # link: always link, replacing whatever is there.
 # none: never touch the extensions directory.
-LINK_MODE=auto
+LINK_MODE="auto"
 
-# The help text is the comment block at the top of this file. Extracted by
-# shape rather than by line number: `sed -n '2,9p'` was correct only until
-# someone added a line above it, and nothing in `make check` can catch a window
-# that has slid. Skip the shebang, strip the leading '# ', drop an SPDX line if
-# one is ever added here, and stop at the first line that is not a comment.
-# scripts/input-lock-x carries the same function verbatim, which is the point:
-# with ranges the two copies had already drifted to different numbers.
-usage() {
-    awk 'NR == 1 { next }
-         /^#/ {
-             sub(/^# ?/, "")
-             if ($0 !~ /^SPDX-License-Identifier:/)
-                 print
-             next
-         }
-         { exit }' "$0"
-}
-
+# usage() comes from lib/usage.sh and reads the comment block at the top of
+# this file.
 for arg in "$@"; do
     case "$arg" in
         --no-sudoers) INSTALL_SUDOERS=0 ;;
@@ -79,13 +77,13 @@ for arg in "$@"; do
                 echo "--daemon-only and --link-extension contradict each other" >&2
                 exit 1
             fi
-            LINK_MODE=none ;;
+            LINK_MODE="none" ;;
         --link-extension)
             if [[ "$LINK_MODE" == none ]]; then
                 echo "--daemon-only and --link-extension contradict each other" >&2
                 exit 1
             fi
-            LINK_MODE=link ;;
+            LINK_MODE="link" ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 1 ;;
     esac
@@ -101,40 +99,118 @@ fi
 # the prerequisite check below depends on the answer: glib-compile-schemas is
 # only needed when this checkout is the copy the shell loads.
 #
-# Only the `foreign` case is new. A fresh clone has nothing at $EXT_DIR and
-# gets the symlink exactly as it always has; a re-run finds our own symlink and
-# leaves it. What used to be wrong is everything else: a real directory means
-# somebody else installed the extension -- almost certainly
-# extensions.gnome.org -- and `rm -rf` on it silently swapped a managed install
-# for a checkout the Extensions app cannot update, and that breaks outright if
-# this directory is ever moved or deleted.
+# Two separate questions, asked separately on purpose. ext_state describes the
+# kind of path that is there. ext_links_to_repo is the ownership check: only a
+# symlink that resolves to *this* checkout is trusted as ours. A symlink into a
+# second checkout, or a dangling symlink, is warned about before it is changed.
 #
 # Nothing between here and the linking block can change the answer: the legacy
 # migration below touches $LEGACY_EXT_DIR, which is a different path.
-EXT_PRESENT=0
-if [[ -e "$EXT_DIR" || -L "$EXT_DIR" ]]; then
-    EXT_PRESENT=1
-fi
+EXT_STATE="$(ext_state)"
 
 if [[ "$LINK_MODE" == none ]]; then
-    EXT_ACTION=skip
-elif [[ $EXT_PRESENT -eq 0 ]]; then
-    EXT_ACTION=link
-elif [[ -L "$EXT_DIR" && "$(readlink -f "$EXT_DIR")" == "$REPO/extension" ]]; then
-    EXT_ACTION=keep
+    EXT_ACTION="skip"
+elif [[ "$EXT_STATE" == absent ]]; then
+    EXT_ACTION="link"
+elif ext_links_to_repo "$REPO"; then
+    EXT_ACTION="keep"
+elif [[ "$EXT_STATE" == symlink ]]; then
+    # A link that does not resolve to this checkout may be another tool's
+    # install, a second clone, or a dangling link left after a move. Repointing
+    # it changes what GNOME loads, so it asks first in every case.
+    EXT_ACTION="hijack"
 elif [[ "$LINK_MODE" == link ]]; then
-    EXT_ACTION=link
+    EXT_ACTION="link"
 else
-    EXT_ACTION=foreign
+    # A real directory. Somebody else installed the extension, and `rm -rf` on
+    # it would silently swap a managed install for a checkout the Extensions
+    # app cannot update.
+    EXT_ACTION="foreign"
 fi
 
-# True when the shell ends up loading this checkout, whether we linked it just
-# now or found our own symlink already in place. Gates the schema compile: the
-# schema has to be compiled where the shell reads it from.
+# Both destructive paths ask here, in the decision phase, and not where the
+# deletion actually happens. By the time the linking block runs, the legacy
+# migration further down has already released the old lock, removed the old
+# unit, polkit rule, CLI and emergency-unlock script and run daemon-reload --
+# so answering "no" down there left a machine with the previous generation
+# destroyed and nothing new installed. Everything that can refuse is hoisted
+# above the first irreversible step, which is what the block comment at the top
+# of this section means by deciding before anything else.
+case "$EXT_ACTION" in
+link)
+    if [[ "$EXT_STATE" == foreign ]]; then
+        warn \
+            "About to delete a directory this script did not install:" \
+            "" \
+            "    $EXT_DIR" \
+            "" \
+            "and replace it with a symlink to $REPO/extension." \
+            "Whatever installed it -- the Extensions app, an unpacked zip --" \
+            "will no longer be able to update or remove it."
+        if ! confirm "   Type yes to continue: "; then
+            echo "   aborted -- nothing was removed, nothing was installed" >&2
+            echo "   (no terminal to ask at? re-run it from one.)" >&2
+            exit 1
+        fi
+    fi
+    ;;
+hijack)
+    warn \
+        "The extension is already a symlink that does not resolve to this checkout:" \
+        "" \
+        "    $EXT_DIR" \
+        "      -> $(readlink "$EXT_DIR")" \
+        "" \
+        "Continuing points it at this one instead:" \
+        "" \
+        "    $REPO/extension" \
+        "" \
+        "The existing symlink target is left on disk untouched, but it stops" \
+        "being what your shell loads."
+    if ! confirm "   Type yes to continue: "; then
+        echo "   aborted -- the existing symlink was left alone, and" >&2
+        echo "   nothing was installed" >&2
+        exit 1
+    fi
+    ;;
+esac
+
+# True when the shell ends up loading this checkout, so this is the tree whose
+# compiled schema the shell reads and therefore the one that has to be rebuilt.
+#
+# Note the `skip` arm. --daemon-only does not install, replace or remove the
+# extension, but if our symlink is already there the shell still loads this
+# tree -- and a stale gschemas.compiled after a `git pull` makes getSettings()
+# throw and takes the panel icon and the shortcut with it.
 EXT_IS_REPO=0
-if [[ "$EXT_ACTION" == link || "$EXT_ACTION" == keep ]]; then
-    EXT_IS_REPO=1
-fi
+case "$EXT_ACTION" in
+    link|hijack|keep) EXT_IS_REPO=1 ;;
+    skip) if ext_links_to_repo "$REPO"; then EXT_IS_REPO=1; fi ;;
+esac
+
+# True only when this run puts the extension somewhere it was not before. That,
+# and not EXT_IS_REPO, is what the logout at the end is for: Wayland cannot
+# load a newly-placed extension in place, but one that was already loaded
+# before this run stays loaded. Sharing one flag with the schema compile told
+# every --daemon-only refresh to log out for an extension it had not touched.
+EXT_NEWLY_LINKED=0
+case "$EXT_ACTION" in
+    link|hijack) EXT_NEWLY_LINKED=1 ;;
+esac
+
+# Whether this run may touch the extension's enabled state. Only when it placed
+# the extension or confirmed its own symlink: --daemon-only said in as many
+# words that it would not, and the `foreign` path is about to print a box
+# saying it left somebody else's install alone. Both used to fall through to
+# the enable block and rewrite disabled-extensions.
+#
+# `keep` is deliberately included: re-running the installer over your own
+# install is a request to make it work, and the enable is reported in the
+# output rather than done silently.
+EXT_ENABLE=0
+case "$EXT_ACTION" in
+    link|hijack|keep) EXT_ENABLE=1 ;;
+esac
 
 # --------------------------------------------------------------------------
 say "Checking prerequisites"
@@ -151,11 +227,16 @@ need() {  # need <command> <hint>
 
 need systemctl "this installs a systemd service, and there is no other backend"
 need sudo "this refuses to run as root and reaches for sudo instead; without it, run the sudo lines by hand as root"
-# Only needed when this checkout is the copy the shell loads, because then the
-# schema has to be compiled in place. An extension installed from
-# extensions.gnome.org carries its own compiled schema, so a daemon-only
-# install has no use for the tool and must not fail for want of it.
-if [[ $EXT_IS_REPO -eq 1 ]]; then
+# Fatal only when this run places the extension: without the tool the schema
+# cannot be compiled at all and the extension is guaranteed to throw on first
+# load, so refusing beats installing something that cannot work.
+#
+# A refresh over an existing install -- `keep`, or --daemon-only over our own
+# symlink -- still wants the tool, but must not refuse the whole install for
+# want of it. Making it fatal there turned `make install-daemon` on a machine
+# without libglib2.0-bin from a working daemon into no daemon at all. That case
+# warns at the compile step instead.
+if [[ $EXT_NEWLY_LINKED -eq 1 ]]; then
     need glib-compile-schemas "Debian/Ubuntu: libglib2.0-bin; Fedora: glib2-devel; Arch: glib2"
 fi
 # Only used by usage() above, so a machine without it has already got this far.
@@ -291,15 +372,26 @@ link)
     say "Linking the extension into place"
     # A symlink rather than a copy, so edits in the repo are live after a
     # re-login.
-    if [[ $EXT_PRESENT -eq 1 ]]; then
-        echo "   replacing existing $EXT_DIR"
+    # Consent for deleting a foreign directory was taken in the decision
+    # phase, above the legacy migration, so there is nothing left to ask here.
+    if [[ "$EXT_STATE" == foreign ]]; then
         rm -rf "$EXT_DIR"
+        echo "   removed $EXT_DIR"
     else
         mkdir -p "$(dirname "$EXT_DIR")"
     fi
     ln -s "$REPO/extension" "$EXT_DIR"
     echo "   $EXT_DIR -> $REPO/extension"
-    EXT_PRESENT=1
+    ;;
+hijack)
+    say "Pointing the extension symlink at this checkout"
+    echo "   was: $EXT_DIR -> $(readlink "$EXT_DIR")"
+    # rm -f, not rm -rf: the branch guarantees a symlink, and rm removes the
+    # link rather than following it, so whatever it used to point at is left
+    # alone.
+    rm -f "$EXT_DIR"
+    ln -s "$REPO/extension" "$EXT_DIR"
+    echo "   now: $EXT_DIR -> $REPO/extension"
     ;;
 keep)
     say "Linking the extension into place"
@@ -312,10 +404,11 @@ foreign)
         "" \
         "    $EXT_DIR" \
         "" \
-        "Almost certainly extensions.gnome.org. Replacing it with a symlink" \
-        "to this checkout would leave the Extensions app unable to update" \
-        "it, and would break the extension outright if this directory is" \
-        "ever moved or deleted. So only the daemon is being installed." \
+        "A real directory, not a symlink, so this script did not put it" \
+        "there -- the Extensions app, or an unpacked zip. Replacing it with" \
+        "a symlink to this checkout would break it outright if this" \
+        "directory is ever moved or deleted, so only the daemon is being" \
+        "installed." \
         "" \
         "The extension/ directory in this checkout is NOT what your shell" \
         "loads. Edits here will do nothing until you run:" \
@@ -328,18 +421,43 @@ foreign)
     ;;
 skip)
     say "Leaving the extensions directory alone (--daemon-only)"
-    if [[ $EXT_PRESENT -eq 1 ]]; then
-        echo "   untouched: $EXT_DIR"
-    else
+    if [[ "$EXT_STATE" == absent ]]; then
         echo "   nothing installed at $EXT_DIR"
+    else
+        echo "   untouched: $EXT_DIR"
     fi
     ;;
 esac
 
 if [[ $EXT_IS_REPO -eq 1 ]]; then
     say "Compiling the GSettings schema"
-    glib-compile-schemas "$REPO/extension/schemas/"
-    echo "   done"
+    if command -v glib-compile-schemas >/dev/null 2>&1; then
+        glib-compile-schemas "$REPO/extension/schemas/"
+        echo "   done"
+        if [[ "$EXT_ACTION" == skip ]]; then
+            # Said out loud rather than left to be discovered: this is the one
+            # path where --daemon-only writes a file that is, through the
+            # symlink, inside ~/.local/share/gnome-shell/extensions. Skipping
+            # it would be worse -- a stale compiled schema after a `git pull`
+            # is what makes the panel icon and the shortcut disappear.
+            echo "   (this checkout is symlinked into the extensions directory,"
+            echo "    so the compiled schema there is the one the shell reads)"
+        fi
+    else
+        # Not fatal here by design; see the prerequisite block above.
+        warn \
+            "glib-compile-schemas is not installed, so the compiled schema" \
+            "could not be refreshed:" \
+            "" \
+            "    $REPO/extension/schemas/gschemas.compiled" \
+            "" \
+            "The daemon below is installed either way. If this checkout is" \
+            "what your shell loads and the schema has changed since that file" \
+            "was built, the extension will throw on next login and the panel" \
+            "icon and shortcut will not appear. Install it and re-run:" \
+            "" \
+            "    Debian/Ubuntu: libglib2.0-bin   Fedora: glib2-devel   Arch: glib2"
+    fi
 fi
 
 say "Installing system components (sudo)"
@@ -487,16 +605,12 @@ case $verify_rc in
         exit 1 ;;
 esac
 
-# Nothing to enable when there is no extension at all -- a --daemon-only run on
-# a machine that has not installed it yet. Everything else falls through: the
-# calls below are idempotent, so running them against a copy someone else
-# installed just confirms it is switched on.
-if [[ $EXT_PRESENT -eq 0 ]]; then
-    say "No extension to enable"
-    echo "   nothing at $EXT_DIR."
-    echo "   Install it from extensions.gnome.org, or re-run without"
-    echo "   --daemon-only to link this checkout into place."
-else
+# Only for an extension this run is responsible for. "Idempotent, so it just
+# confirms it is switched on" was wrong twice over: the fallback below rewrites
+# disabled-extensions, so a --daemon-only or `foreign` run silently switched
+# back on an extension the user had switched off -- while the box a few lines
+# up was promising it had touched nothing.
+if [[ $EXT_ENABLE -eq 1 ]]; then
     say "Enabling the extension"
     # gnome-extensions goes through the running shell, and on a first install
     # the shell has never seen this UUID -- the extension directory was linked
@@ -562,6 +676,16 @@ PY
             echo "       gnome-extensions enable $UUID" >&2
         fi
     fi
+elif [[ "$EXT_STATE" == absent ]]; then
+    say "No extension to enable"
+    echo "   nothing at $EXT_DIR."
+    echo "   Re-run without --daemon-only to link this checkout into place;"
+    echo "   that is the only way to install it, as the extension is not"
+    echo "   published on extensions.gnome.org."
+else
+    say "Leaving the extension's enabled state alone"
+    echo "   $EXT_DIR is as it was, switched on or off. To switch it on:"
+    echo "       gnome-extensions enable $UUID"
 fi
 
 printf '\n== Installed.\n'
@@ -570,13 +694,21 @@ printf '\n== Installed.\n'
 # cannot load one in place. A copy that was already installed is already
 # loaded, and it finds the daemon by itself -- extension.js subscribes to
 # systemd's Reloading signal, which the daemon-reload above emits.
-if [[ $EXT_IS_REPO -eq 1 ]]; then
+if [[ $EXT_NEWLY_LINKED -eq 1 ]]; then
     cat <<'EOF'
 
 Log out and back in before the extension loads -- Wayland cannot reload
 extensions in place.
 EOF
-elif [[ $EXT_PRESENT -eq 1 ]]; then
+elif [[ "$EXT_ACTION" == keep ]]; then
+    cat <<'EOF'
+
+The extension was already linked, so it is already loaded and no logout is
+needed -- unless you have not logged out since you first installed it.
+EOF
+elif [[ "$EXT_STATE" != absent ]]; then
+    # `skip` and `foreign`: neither touched the directory, so EXT_STATE still
+    # describes what is on disk, and whatever is there was loaded at login.
     cat <<'EOF'
 
 No logout needed -- the extension that is already installed picks the daemon

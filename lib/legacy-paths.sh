@@ -1,5 +1,12 @@
+# Copyright (C) 2026 Isak Lindgren
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
 # Everything the pre-rename generation of this tool installed.
 # shellcheck shell=bash
+#
+# Every name below is read by the script that sources this file, never by this
+# file itself -- which is precisely what SC2034 cannot see across a `source`.
+# shellcheck disable=SC2034
 #
 # Sourced by both install.sh (which migrates off these) and uninstall.sh (which
 # has to clean them up even when the migrating install.sh was never run). One
