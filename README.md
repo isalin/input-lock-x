@@ -87,7 +87,34 @@ the only check that proves the service can actually grab.
 Everything here is designed to be recoverable, but the first time you find out
 whether your hardware is detected correctly is a good moment to have a way in.
 
-`./install.sh --no-sudoers` skips the passwordless sudo drop-in; see below.
+### If you installed the extension from extensions.gnome.org
+
+Run the same installer — it works out the rest:
+
+```sh
+./install.sh
+```
+
+It notices that something else already installed the extension, leaves that
+copy completely alone, installs only the daemon, and prints a warning saying
+so. **No logout is needed** in this case: the installed extension subscribes to
+systemd's `Reloading` signal, so it finds the daemon within a second and the
+panel icon starts working on its own.
+
+`./install.sh --daemon-only` (or `make install-daemon`) is the same thing
+stated explicitly, and it stays out of `~/.local/share/gnome-shell/extensions`
+even if nothing is installed there yet.
+
+The trade is that this repo's `extension/` is then *not* what your shell loads,
+so edits here do nothing until you ask for the symlink explicitly.
+
+### Options
+
+| Flag | Effect |
+| --- | --- |
+| `--no-sudoers` | skip the passwordless sudo drop-in; see [Sudo and admin groups](#sudo-and-admin-groups) |
+| `--daemon-only` | never touch `~/.local/share/gnome-shell/extensions` at all, whatever is or is not there |
+| `--link-extension` | replace whatever is at the extension path with a symlink to this checkout, even if something else installed it |
 
 ## Uninstall
 
@@ -97,6 +124,15 @@ whether your hardware is detected correctly is a good moment to have a way in.
 
 It releases any active lock before removing anything, and cleans up both the
 current and the pre-rename generation of files.
+
+It removes only what `install.sh` put there. An extension installed from
+extensions.gnome.org is left in place — still installed, still enabled, its
+shortcut setting intact — and only shows the "daemon not installed" icon.
+Remove it from the Extensions app, or with:
+
+```sh
+gnome-extensions uninstall input-lock-x@isalin.github.io
+```
 
 ### Upgrading from `minibookx-hid-lock`
 
@@ -340,8 +376,9 @@ group or edit the group list in the polkit rule.
 
 | Path | Purpose |
 | --- | --- |
-| `extension/` | GNOME Shell extension, symlinked to `~/.local/share/gnome-shell/extensions/input-lock-x@isalin.github.io` |
+| `extension/` | GNOME Shell extension, symlinked to `~/.local/share/gnome-shell/extensions/input-lock-x@isalin.github.io` unless a copy from extensions.gnome.org is already there |
 | `extension/common.js` | unit name and the installed-check, shared by `extension.js` and `prefs.js` |
+| `lib/output.sh` | `say`, `warn` and the boxed warning, shared by `install.sh` and `uninstall.sh` |
 | `lib/paths.sh` | every path this installs, shared by `install.sh` and `uninstall.sh` |
 | `lib/legacy-paths.sh` | the pre-rename paths, shared by `install.sh` and `uninstall.sh` |
 | `lib/release-lock.sh` | release any active grab, shared by `install.sh` and `uninstall.sh` |

@@ -2,22 +2,28 @@ UUID := input-lock-x@isalin.github.io
 EXT_DIR := $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
 BUILD := build
 
-.PHONY: help install uninstall reinstall schemas status logs unlock check test pack clean
+.PHONY: help install install-daemon uninstall reinstall schemas status logs unlock check test pack clean
 
 help:
-	@echo "make install    install extension + daemon + scripts (uses sudo)"
-	@echo "make uninstall  remove everything, releasing any lock first"
-	@echo "make reinstall  uninstall then install"
-	@echo "make schemas    recompile the GSettings schema only"
-	@echo "make status     show current lock state and matched devices"
-	@echo "make logs       follow the daemon journal"
-	@echo "make unlock     emergency release"
-	@echo "make check      syntax-check the daemon, scripts and extension"
-	@echo "make test       run the classifier against this machine, no root needed"
-	@echo "make pack       build the extensions.gnome.org zip"
+	@echo "make install         install extension + daemon + scripts (uses sudo)"
+	@echo "make install-daemon  daemon + scripts only, leaving the extension alone"
+	@echo "make uninstall       remove everything, releasing any lock first"
+	@echo "make reinstall       uninstall then install"
+	@echo "make schemas         recompile the GSettings schema only"
+	@echo "make status          show current lock state and matched devices"
+	@echo "make logs            follow the daemon journal"
+	@echo "make unlock          emergency release"
+	@echo "make check           syntax-check the daemon, scripts and extension"
+	@echo "make test            run the classifier against this machine, no root needed"
+	@echo "make pack            build the extensions.gnome.org zip"
 
 install:
 	@./install.sh
+
+# For a machine whose extension came from extensions.gnome.org: installs the
+# daemon and never touches ~/.local/share/gnome-shell/extensions.
+install-daemon:
+	@./install.sh --daemon-only
 
 uninstall:
 	@./uninstall.sh
@@ -43,13 +49,14 @@ check:
 	@sh -n scripts/input-lock-x-emergency-unlock && echo "input-lock-x-emergency-unlock: ok"
 	@bash -n install.sh && echo "install.sh: ok"
 	@bash -n uninstall.sh && echo "uninstall.sh: ok"
+	@bash -n lib/output.sh && echo "lib/output.sh: ok"
 	@bash -n lib/paths.sh && echo "lib/paths.sh: ok"
 	@bash -n lib/legacy-paths.sh && echo "lib/legacy-paths.sh: ok"
 	@bash -n lib/release-lock.sh && echo "lib/release-lock.sh: ok"
 	@# Optional: shellcheck catches the set -e and quoting traps `sh -n` cannot.
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -S warning install.sh uninstall.sh \
-			lib/paths.sh lib/legacy-paths.sh lib/release-lock.sh \
+			lib/output.sh lib/paths.sh lib/legacy-paths.sh lib/release-lock.sh \
 			scripts/input-lock-x scripts/input-lock-x-emergency-unlock \
 			&& echo "shellcheck: ok"; \
 	else \

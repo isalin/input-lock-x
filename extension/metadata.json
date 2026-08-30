@@ -4,7 +4,6 @@
   "uuid": "input-lock-x@isalin.github.io",
   "settings-schema": "org.gnome.shell.extensions.input-lock-x",
   "url": "https://github.com/isalin/input-lock-x",
-  "session-modes": ["user"],
   "shell-version": [
     "45",
     "46",
