@@ -1,8 +1,12 @@
 # Input Lock X
 
-Input Lock X is a GNOME Shell extension and a small root daemon for temporarily
-disabling a convertible's internal keyboard and touchpad. It is useful in tablet
-mode, or when you want to clean the screen without generating input.
+Input Lock X is an open-source GNOME Shell extension for Linux that temporarily
+disables a convertible laptop's built-in keyboard and touchpad in tablet mode.
+It uses a small companion root daemon to grab selected evdev devices while
+leaving the touchscreen available in auto mode for recovery.
+
+Use it when folding a 2-in-1 laptop into tablet mode or cleaning a touchscreen
+without accidental input. It supports GNOME Shell 45–50 on Wayland and X11.
 
 - Toggle the lock from the panel.
 - Use **Ctrl+Esc** to engage or release it.
@@ -304,6 +308,10 @@ make pack     # build the GNOME extension ZIP
 The GitHub Actions workflow runs `make check` and `make test` on pushes and pull
 requests. `shellcheck` and `node` are optional for a local `make check`, but CI
 requires them.
+
+See [CHANGELOG.md](CHANGELOG.md) for the release history and
+[GitHub Releases](https://github.com/isalin/input-lock-x/releases) for packaged
+versions.
 
 The main components are:
 
