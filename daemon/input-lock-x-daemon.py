@@ -334,6 +334,13 @@ def read_config(config_path):
     except ValueError:
         log(f"max_lock_seconds={raw_max!r} is not an integer, using 0")
         max_lock = 0
+    # int("-60") parses fine, and a negative deadline is silently treated as
+    # "no limit" below -- indistinguishable from the 0 default. Someone who
+    # means "off" gets what they wanted either way; someone who typed -60 for
+    # 60 gets an unbounded lock and no hint. Say so.
+    if max_lock < 0:
+        log(f"max_lock_seconds={max_lock} is negative, using 0 (no limit)")
+        max_lock = 0
 
     return Config(
         mode,
@@ -770,7 +777,17 @@ class Locker:
         self._grabbed = []
 
     def _drop_device(self, dead_fd):
-        """Forget a device that has gone away, so select() stops waking on it."""
+        """Forget a device that has gone away.
+
+        Close its fd and drop the entry from both _devices and _grabbed. The
+        _grabbed removal is the load-bearing one: main()'s finally calls
+        release_all(), which set_grab()s every remaining entry, and a closed fd
+        there means a spurious "[Errno 9] Bad file descriptor" on every
+        device-disappeared shutdown.
+
+        Not about select(): the one caller returns immediately afterwards, so
+        the loop is never re-entered.
+        """
         for entry in list(self._devices):
             path, name, fd = entry
             if fd != dead_fd:
@@ -843,10 +860,13 @@ class Locker:
                     break
                 timeout = min(timeout, remaining)
 
+            # No InterruptedError arm: PEP 475 makes select() retry on EINTR
+            # itself, so a signal never surfaces here -- SIGTERM runs stop(),
+            # which only clears the flag, and this call keeps waiting out its
+            # timeout. Shutdown therefore lags by up to `timeout` (1.0s), well
+            # inside the unit's TimeoutStopSec=5.
             try:
                 readable, _, _ = select.select(self._fds, [], [], timeout)
-            except InterruptedError:
-                continue
             except OSError as exc:
                 log(f"select failed: {exc}")
                 break

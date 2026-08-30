@@ -21,9 +21,14 @@ UNLOCK="/usr/local/bin/input-lock-x-emergency-unlock"
 # is no domain transition, the service runs as init_t, and every
 # /dev/input/event* open fails with EACCES even though the service is root.
 DAEMON_BIN="/usr/local/bin/input-lock-x-daemon"
-# Matched against full command lines, so it has to be what shows up in ps: the
-# daemon is a python script, so $0 is the interpreter and the path is argv[1].
-DAEMON_PATTERN="input-lock-x-daemon"
+# Matched as a substring of full command lines, so it has to be what shows up
+# in ps: the daemon is a python script, so $0 is the interpreter and this path
+# is argv[1]. Anchored on the install path, not the bare basename, for the
+# reason scripts/input-lock-x-emergency-unlock spells out at its daemon_pids
+# helper -- `vim daemon/input-lock-x-daemon.py` and `make check`'s py_compile
+# both contain the basename, and mistaking either for a live daemon reports a
+# failed release while input is perfectly fine.
+DAEMON_PATTERN="$DAEMON_BIN"
 
 # Removable files. Not CONF: a config may have been edited by hand, so it is
 # left on disk and only mentioned in the closing message.

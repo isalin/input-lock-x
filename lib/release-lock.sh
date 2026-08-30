@@ -9,6 +9,55 @@
 #
 # Returns the honest status: 0 only if input is believed released.
 
+# Which processes could still be holding a grab? Read out of /proc rather than
+# asked of pgrep, for the two reasons scripts/input-lock-x-emergency-unlock
+# already learned the hard way at its daemon_pids helper:
+#
+#   - `input-lock-x status` really does run the daemon binary, with --list.
+#     That instance grabs nothing, so counting it makes every caller report a
+#     failed release while input is perfectly fine -- and deciding that needs
+#     the command line, which pgrep will not hand back on its own.
+#   - pgrep is procps, not coreutils. Without it the old code fell back to "the
+#     state file exists, so assume a stray", which turned a leftover file from a
+#     daemon that died badly into a permanent failure no re-run could clear --
+#     and uninstall.sh treats that as fatal.
+#
+# The third false positive that script names -- `vim daemon/input-lock-x-daemon.py`,
+# `make check`'s py_compile, anything that merely *mentions* the daemon -- is
+# not solved here but in lib/paths.sh, by anchoring DAEMON_PATTERN on the full
+# install path. Hence substring matching rather than an anchor of our own:
+# LEGACY_DAEMON_PATTERN is deliberately still a bare basename, because that
+# generation moved its daemon between two directories part-way through and a
+# machine can be running either.
+stray_daemon_pids() {  # stray_daemon_pids <daemon-pattern>
+    local pattern="$1" dir pid cmdline
+
+    for dir in /proc/[0-9]*; do
+        pid="${dir#/proc/}"
+        # Ourselves. Both, not just $$: callers assign this in a command
+        # substitution, and that subshell inherits the caller's command line
+        # verbatim -- so a caller invoked with the pattern anywhere in its own
+        # argv would find its own fork. $$ is the caller, $BASHPID the subshell.
+        [[ "$pid" == "$$" || "$pid" == "$BASHPID" ]] && continue
+        # The process can exit between the glob and the read, and kernel
+        # threads have no cmdline at all. Either way, not a daemon.
+        #
+        # 2>/dev/null before the input redirect, not after: redirections are
+        # applied left to right, and a failing `<` on a vanished /proc entry is
+        # reported by the shell to whatever fd 2 is at that moment. Written the
+        # usual way round it prints "No such file or directory" for every
+        # process that exits mid-scan.
+        cmdline="$(tr '\0' ' ' 2>/dev/null <"$dir/cmdline")" || continue
+        [[ "$cmdline" == *"$pattern"* ]] || continue
+        [[ "$cmdline" == *--list* ]] && continue
+        echo "$pid"
+    done
+
+    # Explicit, because callers assign this in a command substitution under
+    # `set -e`: a non-zero status from the last loop iteration would abort them.
+    return 0
+}
+
 release_lock() {  # release_lock <unit> <state-file> <unlock-script> <daemon-pattern>
     local unit="$1" state="$2" unlock="$3" pattern="$4"
 
@@ -35,20 +84,11 @@ release_lock() {  # release_lock <unit> <state-file> <unlock-script> <daemon-pat
     #
     # A grab lives on the fd that took it, so "no daemon process" and "no grab"
     # are the same statement -- which makes the process list the evidence to
-    # look at, not the state file.
-    #
-    # pgrep, never pkill: `sudo pkill -f <pattern>` matches its own sudo
-    # parent's command line and SIGTERMs it. -f either way, because the daemon
-    # is a script and its $0 is the interpreter.
-    local stray=""
-    if command -v pgrep >/dev/null 2>&1; then
-        stray="$(pgrep -f -- "$pattern" 2>/dev/null || true)"
-    elif [[ -e "$state" ]]; then
-        # No pgrep, so the state file is the only evidence there is. The daemon
-        # removes it on the way out and the unit's ExecStopPost removes it
-        # after a kill, so one still here means nothing we control cleared it.
-        stray="unknown"
-    fi
+    # look at, not the state file. Read it, never act on it in bulk: the reason
+    # this is not `sudo pkill -f <pattern>` is that pkill matches its own sudo
+    # parent's command line and SIGTERMs it.
+    local stray
+    stray="$(stray_daemon_pids "$pattern")"
 
     if [[ -n "$stray" ]]; then
         echo >&2
@@ -57,9 +97,9 @@ release_lock() {  # release_lock <unit> <state-file> <unlock-script> <daemon-pat
         echo "keyboard and touchpad exclusively." >&2
         echo >&2
         echo "Stop it first -- over SSH or from another VT if the keyboard is" >&2
-        echo "already dead -- then re-run this. To see what it is:" >&2
-        echo "    ps -ef | grep -F -- '$pattern'" >&2
-        echo "    sudo kill -9 <pid>" >&2
+        echo "already dead -- then re-run this. To see what they are:" >&2
+        echo "    ps -fp ${stray//$'\n'/,}" >&2
+        echo "    sudo kill -9 ${stray//$'\n'/ }" >&2
         return 1
     fi
 

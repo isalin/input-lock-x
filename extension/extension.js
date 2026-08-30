@@ -73,12 +73,20 @@ class InputLockButton extends PanelMenu.Button {
         this.add_style_class_name('input-lock-x-toggle');
     }
 
-    // Handle touch as well as pointer: in tablet mode the touchscreen is the
-    // only working input device, and it is the way back from a locked state.
+    /* Handle touch as well as pointer: in tablet mode the touchscreen is the
+     * only working input device, and it is the way back from a locked state.
+     * Touch is unconditional -- it has no button to check.
+     *
+     * Pointer presses are restricted to the primary button. PanelMenu.Button
+     * toggles on any button, but that opens a menu; this disables the keyboard
+     * and touchpad, so a stray right- or middle-click should not do it. Nothing
+     * else would absorb them either: the button is built with dontCreateMenu,
+     * which leaves the base gesture disabled and this.menu a PopupDummyMenu. */
     vfunc_event(event) {
         const type = event.type();
-        if (type === Clutter.EventType.BUTTON_PRESS ||
-            type === Clutter.EventType.TOUCH_BEGIN) {
+        if (type === Clutter.EventType.TOUCH_BEGIN ||
+            (type === Clutter.EventType.BUTTON_PRESS &&
+             event.get_button() === Clutter.BUTTON_PRIMARY)) {
             this._onActivate();
             return Clutter.EVENT_STOP;
         }
@@ -122,7 +130,28 @@ class InputLockButton extends PanelMenu.Button {
 });
 
 export default class InputLockXExtension extends Extension {
+    /* The shell does not call disable() when enable() throws -- it only
+     * unloads the stylesheet and logs -- so everything registered before the
+     * throw leaks. The panel button is the one that bites: the shell tracks it
+     * by role, and a leaked one makes the next reload die on "Extension point
+     * conflict" instead of the original error, which is a far harder thing to
+     * diagnose. Tear our own state down, then re-raise so the shell still
+     * records the real cause. disable() is null-safe at every step, so it
+     * copes with however far setup got.
+     *
+     * getSettings() is the realistic thrower: schemas/gschemas.compiled is
+     * gitignored and install.sh symlinks this repo into the extensions dir,
+     * so a tree that never ran `make schemas` has no compiled schema. */
     enable() {
+        try {
+            this._setUp();
+        } catch (e) {
+            this.disable();
+            throw e;
+        }
+    }
+
+    _setUp() {
         this._locked = this._readState();
         // Assume installed until the probe says otherwise, so a slow bus does
         // not flash a warning icon on every login.
@@ -134,10 +163,6 @@ export default class InputLockXExtension extends Extension {
         this._pollTick = 0;
         this._reloadId = 0;
         this._cancellable = new Gio.Cancellable();
-
-        this._button = new InputLockButton(() => this._toggle());
-        this._button.setLocked(this._locked);
-        Main.panel.addToStatusArea(this.uuid, this._button, 0, 'right');
 
         this._settings = this.getSettings();
         // _installed is still optimistically true here, so a normal install
@@ -178,6 +203,14 @@ export default class InputLockXExtension extends Extension {
                 }
                 return GLib.SOURCE_CONTINUE;
             });
+
+        // Registered last, on purpose: this is the only thing the shell holds a
+        // reference to by name, so nothing above can strand it. _refresh() and
+        // _probeInstall() both reach for this._button through `?.`, so the
+        // callbacks wired up above are safe until it exists.
+        this._button = new InputLockButton(() => this._toggle());
+        this._button.setLocked(this._locked);
+        Main.panel.addToStatusArea(this.uuid, this._button, 0, 'right');
 
         this._probeInstall();
     }

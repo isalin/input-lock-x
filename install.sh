@@ -35,12 +35,28 @@ INSTALL_SUDOERS=1
 
 say() { printf '\n== %s\n' "$*"; }
 
+# The help text is the comment block at the top of this file. Extracted by
+# shape rather than by line number: `sed -n '2,9p'` was correct only until
+# someone added a line above it, and nothing in `make check` can catch a window
+# that has slid. Skip the shebang, strip the leading '# ', drop an SPDX line if
+# one is ever added here, and stop at the first line that is not a comment.
+# scripts/input-lock-x carries the same function verbatim, which is the point:
+# with ranges the two copies had already drifted to different numbers.
+usage() {
+    awk 'NR == 1 { next }
+         /^#/ {
+             sub(/^# ?/, "")
+             if ($0 !~ /^SPDX-License-Identifier:/)
+                 print
+             next
+         }
+         { exit }' "$0"
+}
+
 for arg in "$@"; do
     case "$arg" in
         --no-sudoers) INSTALL_SUDOERS=0 ;;
-        # Same one-liner the two CLI scripts use, so all three help texts
-        # come out looking alike rather than one keeping its '#' prefixes.
-        -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 1 ;;
     esac
 done
@@ -66,6 +82,9 @@ need() {  # need <command> <hint>
 need systemctl "this installs a systemd service, and there is no other backend"
 need sudo "this refuses to run as root and reaches for sudo instead; without it, run the sudo lines by hand as root"
 need glib-compile-schemas "Debian/Ubuntu: libglib2.0-bin; Fedora: glib2-devel; Arch: glib2"
+# Only used by usage() above, so a machine without it has already got this far.
+# Listed anyway: this loop is the one place that says what the script needs.
+need awk "Debian/Ubuntu: mawk or gawk; Fedora: gawk; Arch: gawk"
 
 # The unit's ExecStart runs the daemon directly and its shebang is
 # /usr/bin/python3, so a python3 that only exists elsewhere in PATH is not
@@ -125,12 +144,22 @@ fi
 # `if`, not `[[ -e x ]] && flag=1`: under set -e a false test at the end of an
 # && list exits the script, which on a fresh install is every one of them.
 legacy_present=0
-for path in "$LEGACY_CONF" "$LEGACY_EXT_DIR" "${LEGACY_FILES[@]}"; do
+for path in "$LEGACY_CONF" "$LEGACY_EXT_DIR" "$LEGACY_LIB_DIR" "$LEGACY_STATE" \
+        "${LEGACY_FILES[@]}"; do
     if [[ -e "$path" ]]; then
         legacy_present=1
         break
     fi
 done
+
+# LEGACY_DCONF_PATH is a dconf path, not a filesystem one, so it cannot join the
+# loop above -- but the block below is the only thing that carries the old
+# keybinding across and resets the old path, and a machine whose files were
+# removed by hand would otherwise keep those keys forever.
+if [[ $legacy_present -eq 0 ]] && command -v dconf >/dev/null 2>&1 && \
+        [[ -n "$(dconf list "$LEGACY_DCONF_PATH" 2>/dev/null || true)" ]]; then
+    legacy_present=1
+fi
 
 if [[ $legacy_present -eq 1 ]]; then
     say "Migrating from the previous install (minibookx-hid-lock)"
@@ -265,6 +294,17 @@ sudo "$DAEMON_BIN" --list
 # service domain cannot, so --list passing proves nothing about the service.
 # Start the unit for real, which is the check that actually matters.
 say "Verifying the service can grab (engages the lock briefly)"
+
+# Was input already locked before this install touched anything? Nothing above
+# starts or stops this unit, and the block below ends with it stopped whichever
+# way it goes -- so a user who had the lock engaged loses it here, and without
+# this flag nothing would tell them apart from the test lock we engage
+# ourselves.
+lock_was_engaged=0
+if systemctl is-active --quiet "$UNIT" || [[ -e "$STATE" ]]; then
+    lock_was_engaged=1
+fi
+
 # One sudo, not three or four. This is the only moment in the install where
 # input is genuinely locked, and the credential cache is not guaranteed to be
 # warm -- `Defaults timestamp_timeout=0` is a real configuration, and under it
@@ -277,7 +317,17 @@ say "Verifying the service can grab (engages the lock briefly)"
 verify_rc=0
 sudo bash -s <<'VERIFY' || verify_rc=$?
 set -u
-systemctl start input-lock-x.service || exit 10
+# restart, not start: `start` on an already-active unit returns 0 without doing
+# anything, so it would say nothing about the daemon this install just wrote --
+# which is the entire point of the check. Restart:no and no RefuseManualStart,
+# so a restart here is always allowed.
+systemctl restart input-lock-x.service || exit 10
+# A 0 from restart only says the unit reached active. Ask for the same evidence
+# `input-lock-x status` trusts: the state file. This is not a race -- the unit
+# is Type=notify with NotifyAccess=main, and the daemon writes the state file
+# before it calls sd_notify(READY=1), so restart cannot have returned until the
+# grab was real.
+[ -e /run/input-lock-x.state ] || { systemctl stop input-lock-x.service; exit 13; }
 systemctl stop input-lock-x.service && exit 0
 /usr/local/bin/input-lock-x-emergency-unlock && exit 11
 systemctl kill --signal=KILL input-lock-x.service
@@ -285,9 +335,19 @@ rm -f /run/input-lock-x.state
 exit 12
 VERIFY
 
+# Before the case, because every outcome below -- including the ones that exit
+# -- has left a pre-existing lock released: restart stops the running daemon
+# before it starts a new one, and each failure path ends with the unit down.
+if [[ $lock_was_engaged -eq 1 ]]; then
+    echo "   NOTE: input was already locked when this install started."
+    echo "   Verifying restarted the daemon, so that lock is gone and the"
+    echo "   keyboard and touchpad are live again. Re-engage it with:"
+    echo "     input-lock-x on"
+fi
+
 case $verify_rc in
     0)
-        echo "   service started and stopped cleanly" ;;
+        echo "   service started, grabbed, and stopped cleanly" ;;
     10)
         echo "   FAILED -- the unit could not start. Diagnose with:" >&2
         echo "     sudo journalctl -u input-lock-x.service -b | tail -30" >&2
@@ -301,6 +361,13 @@ case $verify_rc in
         echo "The unit would not stop and recovery reported failure. The daemon" >&2
         echo "was killed, which the kernel treats as a release, but confirm it:" >&2
         echo "    ssh $(hostname) input-lock-x status" >&2
+        exit 1 ;;
+    13)
+        echo "   FAILED -- the unit started but grabbed nothing: it reported" >&2
+        echo "   ready and $STATE never appeared. Most likely no device" >&2
+        echo "   matched, or the grab was refused. Diagnose with:" >&2
+        echo "     sudo journalctl -u input-lock-x.service -b | tail -30" >&2
+        echo "     sudo $DAEMON_BIN --list" >&2
         exit 1 ;;
     *)
         echo "   FAILED -- could not run the check as root (sudo exited $verify_rc)." >&2
