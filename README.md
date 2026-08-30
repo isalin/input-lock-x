@@ -1,625 +1,323 @@
 # Input Lock X
 
-Disable the internal keyboard and touchpad with one tap, so folding a
-convertible into tablet mode — or wiping the screen, or handing the machine to
-a cat — stops generating accidental input.
+Input Lock X is a GNOME Shell extension and a small root daemon for temporarily
+disabling a convertible's internal keyboard and touchpad. It is useful in tablet
+mode, or when you want to clean the screen without generating input.
 
-- A **panel icon** in the top right toggles the lock.
-- **Ctrl+Esc** locks *and* unlocks — the one combination that always works.
-- An **"Input Disabled" / "Input Enabled"** notification confirms each change.
-- The **touchscreen stays live**, so the icon is always tappable.
+- Toggle the lock from the panel.
+- Use **Ctrl+Esc** to engage or release it.
+- The touchscreen stays available in auto mode, so the panel icon remains usable.
+- Notifications show when input is disabled or enabled.
 
-It was written for a Chuwi Minibook X, but nothing in it is specific to that
-machine: devices are chosen by their evdev capabilities, not by a hardcoded
-list. See [Which devices get locked](#which-devices-get-locked).
+The project was written on a Chuwi Minibook X, but device selection is based on
+evdev capabilities rather than a list of machine-specific names.
 
-**Requirements:** GNOME Shell 45–50 on Wayland or X11, systemd, polkit ≥ 0.106,
-Python 3 (stdlib only). Tested on Fedora; the packaging is distro-neutral.
+> **Warning:** this installs a root service and can disable every input device
+> that matches its configuration. Keep an SSH session open during the first
+> install and test. In auto mode, the touchscreen and USB/Bluetooth input are
+> left alone by default.
 
-**This repository is two halves.** The GNOME extension is the UI; the actual
-locking is done by a small root daemon, because a shell extension cannot open
-`/dev/input`. Both halves install together with `./install.sh` — see
-[Install](#install) for the step-by-step.
+## Requirements
 
-Not on extensions.gnome.org: the extension alone would give you a panel icon
-that can say only that the daemon is missing, so both halves ship from here
-until that is worth splitting up.
+- GNOME Shell 45–50, on Wayland or X11
+- systemd
+- polkit 0.106 or newer
+- Python 3 (standard library only)
+- `git`, `make`, and `glib-compile-schemas` for installation
 
----
+It has been tested on Fedora. The installer does not depend on a particular
+Linux distribution, but the service needs access to `/dev/input` and a working
+systemd/polkit setup.
 
-## Locked out? Read this first
+The extension and daemon are both required. The extension is not currently
+published on extensions.gnome.org; install both parts from this repository.
 
-From another machine:
+## Recovery
 
-```sh
-ssh <this-laptop> input-lock-x-emergency-unlock
-```
+If the lock does not release normally:
 
-That stops the unit, kills the daemon (escalating to `SIGKILL`), clears any
-sysfs inhibit flags, and reports the result. It is idempotent, makes no
-assumptions about the current state, and **exits non-zero if recovery failed**,
-so `ssh … input-lock-x-emergency-unlock && echo ok` means something.
+1. Press **Ctrl+Esc** on the locked keyboard. The daemon watches for this
+   combination itself, so it also works on the lock screen.
+2. Tap the panel icon from the touchscreen, or use an ungrabbed pointer.
+3. In auto mode, use an external keyboard if one is available.
+4. From another machine, run:
 
-You should rarely need it. In order, the ways back are:
+   ```sh
+   ssh <this-machine> input-lock-x-emergency-unlock
+   ```
 
-| Method | Works when |
-| --- | --- |
-| Press **Ctrl+Esc** | always — the daemon watches for it in its own grabbed stream, so it needs neither the shell nor the configured shortcut |
-| Tap the **panel icon** | whenever the session is unlocked (see below) |
-| Type on an **external keyboard** | in auto mode — USB and Bluetooth devices are not grabbed unless you ask |
-| `input-lock-x off` over SSH | always (see [Sudo and admin groups](#sudo-and-admin-groups)) |
-| `input-lock-x-emergency-unlock` over SSH | even when the above are wedged |
-| `sudo systemctl kill -s KILL input-lock-x` | last resort; the kernel releases the grab when the process dies |
+5. As a last resort, kill the service. The kernel releases its input grabs when
+   the daemon exits:
 
-There is no state in which a reboot fails to restore input — nothing is enabled
-at boot.
+   ```sh
+   sudo systemctl kill -s KILL input-lock-x.service
+   ```
 
-Rows two and three assume auto mode, which is the default. `patterns` mode
-grabs whatever the patterns name, including a touchscreen or a USB keyboard —
-see [Which devices get locked](#which-devices-get-locked). Ctrl+Esc, SSH and
-the reboot hold in every mode.
+Rebooting also restores input; the service is never enabled at boot.
 
-### On the lock screen, Ctrl+Esc is the only local way back
+GNOME disables extensions on the lock screen, so the panel icon is not
+available there. **Ctrl+Esc** is the local escape route in that situation.
 
-GNOME disables extensions while the screen is locked, so the panel icon is not
-there — and the lock deliberately survives a shell restart, so it is still
-engaged. If the session locks while input is disabled you cannot type your
-password until you press **Ctrl+Esc**. The daemon handles that combination
-itself, so it works regardless of what the shell is doing.
+## Installation
 
-Adding `unlock-dialog` to the extension's session-modes would not help: the
-unlock screen does not render extension-provided panel items.
+Run the installer as your normal user. It uses `sudo` for system files.
 
----
+### 1. Install prerequisites
 
-## Install
-
-Everything ships from this repository — the extension is not on
-extensions.gnome.org, so this is the only way in. Six steps, about five
-minutes, one of which is a logout.
-
-> **Open an SSH session from another machine first.**
-> `ssh <this-laptop>` from a desktop, another laptop, or a phone. Everything
-> here is designed to be recoverable, but the first time you find out whether
-> your hardware is detected correctly is a good moment to already have a way
-> in. Keep it open until step 6 has passed.
-
-### 1. Install the prerequisites
-
-A GNOME desktop already has systemd, polkit, sudo, awk and `/usr/bin/python3`.
-What is usually missing is `git`, `make` and `glib-compile-schemas`:
+For example:
 
 ```sh
-sudo dnf install git make glib2-devel        # Fedora, RHEL
-sudo apt install git make libglib2.0-bin     # Debian, Ubuntu
+sudo dnf install git make glib2-devel        # Fedora/RHEL
+sudo apt install git make libglib2.0-bin     # Debian/Ubuntu
 sudo pacman -S git make glib2                # Arch
 sudo zypper install git make glib2-devel     # openSUSE
 ```
 
-No Python packages are needed — the daemon is stdlib only, so there is no
-`python3-evdev` or virtualenv anywhere in this.
-
 ### 2. Clone the repository
+
+Keep the checkout in a permanent location. The installer symlinks the extension
+directory to this checkout.
 
 ```sh
 git clone https://github.com/isalin/input-lock-x.git
 cd input-lock-x
 ```
 
-**Clone it somewhere permanent** — `~/src`, `~/git`, anywhere you will not tidy
-away later. The installer *symlinks* this directory into
-`~/.local/share/gnome-shell/extensions` rather than copying it, so moving the
-checkout afterwards leaves the extension pointing at nothing until you re-run
-`./install.sh` from the new location. The installer shows the old symlink and
-asks before repointing it; deleting the checkout breaks the extension outright.
-That is the trade for edits here going live on the next login.
+### 3. Check device detection
 
-### 3. Check what would get locked, before anything is installed
+This reads `/proc/bus/input/devices` and does not need root or install anything:
 
 ```sh
 make test
 ```
 
-This classifies every input device on the machine by reading
-`/proc/bus/input/devices`. No root, nothing installed, nothing touched. Each
-device is printed as `GRAB` (would be locked) or `skip` (left alone), and the
-last two lines are the ones that matter:
+Your internal keyboard and touchpad should be listed as `GRAB`. The touchscreen,
+external keyboard, and other devices you need for recovery should be listed as
+`skip`. If detection is wrong, use the configuration described below.
 
-```
-escape routes: ['the touchscreen (tap the panel icon)']
-
-2 device(s) would be grabbed: ['AT Translated Set 2 keyboard', '... Touchpad']
-```
-
-Your internal keyboard and touchpad should be in the grab list, and your
-touchscreen should not. If something you rely on is in the wrong column, carry
-on — you can fix it in `/etc/input-lock-x.conf` after step 4. See
-[Which devices get locked](#which-devices-get-locked).
-
-### 4. Run the installer
+### 4. Install
 
 ```sh
-./install.sh          # or: make install
+./install.sh
 ```
 
-It asks for your sudo password once. In order it:
+The installer:
 
-- checks every prerequisite and names anything missing, before changing
-  anything;
-- symlinks `extension/` into `~/.local/share/gnome-shell/extensions` and
-  compiles the GSettings schema;
-- installs the daemon, systemd unit, polkit rule, sudoers drop-in and the two
-  CLI scripts under `sudo`;
-- **starts the unit for real** — briefly locking and unlocking your input —
-  because that is the only check that proves the service can actually grab;
-- and enables the extension last, once the unit is known to work.
+- compiles the GSettings schema;
+- installs the daemon, service, polkit rule, and command-line tools;
+- leaves an existing `/etc/input-lock-x.conf` unchanged;
+- starts the service to verify that it can actually grab the matched devices;
+- enables the extension when this checkout owns the extension directory.
 
-It exits non-zero and says which step failed if any of that goes wrong. It is
-safe to re-run, and `/etc/input-lock-x.conf` is never overwritten once it
-exists.
+It refuses to continue if the service cannot be verified. The first install
+normally requires a logout and login before GNOME loads the extension.
 
-### 5. Log out and back in
-
-**This step is required.** Wayland cannot load a new extension in place, and
-the extension only reached the disk seconds ago. Logging out is enough — no
-reboot.
-
-The daemon half is already live at this point: `input-lock-x on` works from a
-terminal right now. It is the panel icon and the shortcut that are not there
-until the shell restarts.
-
-### 6. Verify
-
-After logging back in there should be a **keyboard icon** in the top right —
-not a yellow warning triangle, which means the shell cannot find the daemon
-(see [Troubleshooting](#troubleshooting)). Confirm from a terminal:
+After logging in, check the installation:
 
 ```sh
 gnome-extensions info input-lock-x@isalin.github.io
-#   Enabled: Yes
-#   State: ACTIVE
-
 input-lock-x status
-#   lock:       released
-#   unit:       inactive
 ```
 
-Then test the real round trip, using the SSH session from the top:
+Then test the complete round trip from another machine:
 
 ```sh
-ssh <this-laptop> input-lock-x on
+ssh <this-machine> input-lock-x on
+# Press Ctrl+Esc on the laptop.
+ssh <this-machine> input-lock-x-emergency-unlock  # if needed
 ```
 
-The laptop's keyboard and touchpad go dead and the panel icon turns red. Press
-**Ctrl+Esc** on the laptop itself — they come back. If they do not:
+### Installer options
+
+```text
+--no-sudoers       Do not install passwordless SSH recovery rules.
+--daemon-only      Install only the system daemon and command-line tools.
+--link-extension   Replace another extension install with this checkout.
+```
+
+Use `--daemon-only` when the extension was installed separately, for example
+from extensions.gnome.org. It does not replace or enable that extension.
+
+`--link-extension` is intended for development or when you explicitly want this
+checkout to replace another copy. The installer asks before deleting a foreign
+extension directory or repointing another symlink.
+
+Without the sudoers file, use a TTY for SSH recovery:
 
 ```sh
-ssh <this-laptop> input-lock-x-emergency-unlock
+ssh -t <this-machine> sudo input-lock-x-emergency-unlock
 ```
-
-Once that round trip works you can trust the panel icon, and the SSH session
-has done its job.
 
 ### Updating
 
+Pull the changes and run the installer again:
+
 ```sh
 git -C /path/to/input-lock-x pull
+cd /path/to/input-lock-x
 ./install.sh
 ```
 
-Run both. The extension is a symlink, so a `pull` updates its *source* on the
-next login — but `extension/schemas/gschemas.compiled` is a build artefact,
-gitignored and never pulled. If the release changed a settings key, that file
-is now stale, and a stale compiled schema is what makes `getSettings()` throw
-and takes the panel icon and the shortcut with it. `install.sh` rebuilds it,
-and refreshes the daemon, unit and scripts in `/usr/local/bin` and `/etc`,
-which are copies rather than symlinks.
+The daemon and system files are installed as copies. The extension is a symlink,
+so do not delete or move the checkout while using it.
 
-`./install.sh --daemon-only` rebuilds the schema too, if you would rather it
-left the extensions directory otherwise untouched.
-
-### If something else already installed the extension
-
-Not a case you can reach today — the extension is only published here — but the
-installer handles it, and this is what happens the day it also lands on
-extensions.gnome.org.
-
-Run the same installer — it works out the rest:
+### Uninstalling
 
 ```sh
-./install.sh
+./uninstall.sh
 ```
 
-It notices that something else already installed the extension, leaves that
-copy completely alone, installs only the daemon, and prints a warning saying
-so. **No logout is needed** in this case: the installed extension subscribes to
-systemd's `Reloading` signal, so it finds the daemon within a second and the
-panel icon starts working on its own.
+It releases any active lock before removing the service and tools. Edited config
+files are left in `/etc` so they can be reviewed or removed manually. An
+extension directory that this installer did not create is left alone.
 
-`./install.sh --daemon-only` (or `make install-daemon`) is the same thing
-stated explicitly, and it stays out of `~/.local/share/gnome-shell/extensions`
-even if nothing is installed there yet.
+Older installations named `minibookx-hid-lock` are migrated automatically by
+`install.sh`; their config and shortcut are carried over.
 
-The trade is that this repo's `extension/` is then *not* what your shell loads,
-so edits here do nothing until you ask for the symlink explicitly.
+## Usage
 
-### Options
+The command-line tool can be used locally or over SSH:
 
-| Flag | Effect |
+```sh
+input-lock-x on       # engage the lock
+input-lock-x off      # release the lock
+input-lock-x toggle   # switch between the two states
+input-lock-x status   # show state and matched devices
+```
+
+The default shortcut engages the lock. Its setting can be changed in
+**Extensions → Input Lock X → Settings**, or with:
+
+```sh
+gsettings --schemadir \
+  ~/.local/share/gnome-shell/extensions/input-lock-x@isalin.github.io/schemas \
+  set org.gnome.shell.extensions.input-lock-x toggle-hid "['<Control>Escape']"
+```
+
+The daemon's release shortcut is always **Ctrl+Esc** and cannot be rebound.
+This is intentional: the escape route should not be possible to configure away.
+
+## Device selection
+
+Auto mode examines every `/dev/input/event*` device:
+
+| Device | Auto mode |
 | --- | --- |
-| `--no-sudoers` | skip the passwordless sudo drop-in; see [Sudo and admin groups](#sudo-and-admin-groups) |
-| `--daemon-only` | never install, replace or remove the extension, and never change whether it is enabled. If this checkout is already symlinked into place it still rebuilds the compiled schema there — the one file it writes under `~/.local/share/gnome-shell/extensions`, and the one whose staleness breaks the panel icon |
-| `--link-extension` | replace whatever is at the extension path with a symlink to this checkout, even if something else installed it. Asks before deleting a directory or repointing a symlink it did not create, and refuses when there is no terminal to ask at |
+| Touchscreen | Never grabbed |
+| Internal keyboard | Grabbed |
+| Internal touchpad or pointing stick | Grabbed |
+| USB or Bluetooth keyboard/pointer | Skipped by default |
+| Virtual/uinput device | Never grabbed |
+| Other devices | Skipped |
 
-## Uninstall
-
-```sh
-./uninstall.sh    # or: make uninstall
-```
-
-It releases any active lock before removing anything, and cleans up both the
-current and the pre-rename generation of files.
-
-It removes only an extension symlink that resolves to this checkout. A real
-directory (the Extensions app, an unpacked zip), or a symlink that belongs to
-another checkout or installer, is left in place — still installed, still
-enabled, its shortcut setting intact — and only shows the "daemon not
-installed" icon. Remove it from the Extensions app, or with:
-
-```sh
-gnome-extensions uninstall input-lock-x@isalin.github.io
-```
-
-### Upgrading from `minibookx-hid-lock`
-
-Earlier versions installed under `minibookx-*` / `hid-*` names. `install.sh`
-migrates automatically: it releases any active lock first, copies
-`/etc/minibookx-hid-lock.conf` to `/etc/input-lock-x.conf`, carries the
-keybinding across in dconf, and removes the old unit, scripts, polkit rule and
-extension. The old config is left on disk, and because it names devices
-explicitly the daemon keeps grabbing exactly what it grabbed before — the
-rename changes no behaviour. Delete `/etc/minibookx-hid-lock.conf` once you are
-satisfied.
-
----
-
-## How it works
-
-```
-  Ctrl+Esc (unlocked)  ─┐
-  tap panel icon       ─┼─> extension ─ D-Bus ─> systemd StartUnit/StopUnit
-                        │                          (polkit: no password)
-                        │                                  │
-                        │                                  v
-                        │                        input-lock-x.service
-                        │                        (root) input-lock-x-daemon.py
-                        │                          · EVIOCGRAB keyboard+touchpad
-                        │                          · reads its own raw stream
-                        │                          · Ctrl+Esc -> ungrab, exit ─┐
-                        │                                  │                   │
-  extension  <─ Gio.FileMonitor ── /run/input-lock-x.state <─────────────┘
-      └─> update icon + notification
-```
-
-The lock is an exclusive `EVIOCGRAB` on `/dev/input/event*`, taken by a small
-root daemon. Nothing above the kernel — not the compositor, not any app — sees
-input from a grabbed device.
-
-**Why a grab and not `/sys/class/input/inputN/inhibited`:**
-
-1. **Ctrl+Esc works both ways.** The daemon holds the exclusive grab, so it is
-   the only thing that can still see the keyboard. It watches for Ctrl+Esc
-   itself and releases. A sysfs inhibit drops the keypress in the kernel where
-   nothing can observe it, so it could only ever *disable*.
-2. **It cannot strand you.** A grab is tied to an open file descriptor. Kill the
-   daemon, crash it, OOM it — the kernel drops the grab and input returns. A
-   sysfs inhibit survives, including across a gnome-shell crash.
-
-The grab is **all or nothing**, at startup and afterwards. If any matched device
-fails to grab — another `EVIOCGRAB` holder, a second daemon instance — the
-daemon releases what it got and refuses to start, so `systemctl start` fails and
-nothing reports a lock. If a grabbed device later disappears (an i2c-HID
-touchpad re-enumerated across suspend is the likely case) the daemon exits
-rather than carry on holding a partial lock. A partial lock is the worst
-available outcome: the icon would stay red and every consumer would say "locked"
-while the device that dropped out kept generating input.
-
-So a suspend/resume cycle may end the lock. That is deliberate — you get the
-"Input Enabled" notification and an honest icon, rather than a red icon over a
-live touchpad.
-
-The **state file is the single source of truth**. The extension never assumes it
-knows the state; it renders what the file says. So the icon stays correct
-whether the change came from the panel, the shortcut, the daemon releasing
-itself, or an SSH command.
-
-### Sticky modifiers
-
-When the lock is engaged from the Ctrl+Esc binding, both keys are still
-physically held and the compositor has already seen them go down. Grabbing at
-that instant would mean the compositor never sees the release and is left with a
-stuck Ctrl. The daemon therefore polls `EVIOCGKEY` and waits for those keys to
-come up before grabbing — and again before releasing.
-
-It waits only on **modifiers and Esc**, not on the whole keyboard. Folded into
-tablet mode the keyboard lies face down with ordinary keys held against the
-table — the very situation this tool is for — so waiting for a completely idle
-keyboard would time out on every lock and silently give up the protection above.
-
-For the same reason the daemon seeds its Ctrl state from `EVIOCGKEY` right after
-grabbing. If Ctrl was already held when the grab was taken, a fresh Esc still
-counts as Ctrl+Esc, so the escape hatch cannot be missed.
-
----
-
-## Which devices get locked
-
-By default the daemon classifies every `/dev/input/event*` node by what the
-kernel says it can do, rather than by name:
-
-| Class | Detected by | Locked? |
-| --- | --- | --- |
-| Touchscreen | `INPUT_PROP_DIRECT`, or multitouch with no physical button | **never** — this is the escape hatch, enforced in code |
-| Touchpad, pointing stick | `INPUT_PROP_POINTER`, `BUTTONPAD` or `POINTING_STICK`; or multitouch + `BTN_TOOL_FINGER`; or relative X/Y + `BTN_LEFT` | yes |
-| Keyboard | reports a real alphanumeric key set (`KEY_A`, `KEY_Z`, `KEY_SPACE`, `KEY_ENTER`, `KEY_1`) | yes |
-| Everything else | — | no |
-
-Probing the key bitmap rather than the device name is what excludes `Power
-Button`, `Video Bus`, `Intel HID events` and the other sparse-keymap devices
-that also report `EV_KEY`.
-
-Some panels driven through a generic HID path never set `INPUT_PROP_DIRECT`.
-The second touchscreen rule catches those: a device with multitouch axes but no
-`BTN_LEFT` and no pointer property has nothing to click, so it is a screen, not
-a touchpad. Guessing "touchscreen" is the safe direction to be wrong in — it
-locks less than you asked for, which is visible, rather than locking away the
-way back.
-
-**USB and Bluetooth devices are skipped**, so a plugged-in external keyboard
-stays live and becomes another way back in. Flip that with `include_usb` /
-`include_bluetooth` in the config if your machine's *internal* keyboard is
-USB-attached — some convertibles wire it that way.
-
-**Virtual (uinput) devices are never grabbed.** input-remapper, keyd, kmonad,
-Steam Input, on-screen keyboards and remote-desktop agents all create one.
-Grabbing it would swallow the events that tool is injecting — on a remapper
-setup, the keyboard you actually type on. The physical device underneath is a
-separate node and is still locked on its own merits.
-
-Everything in this section describes **auto mode**. `patterns` mode does none
-of it: a pattern is an explicit instruction, so it grabs what it matches
-regardless of bus or class. The daemon warns on startup when a pattern matches
-a touchscreen, but it obeys. If you need patterns for one device and the
-guards for the rest, name only that device — `exclude` works in both modes, but
-the class and bus rules do not.
-
-Check what would happen on your hardware before trusting it:
-
-```sh
-make test                      # no root needed: classifies from /proc/bus/input/devices
-sudo input-lock-x-daemon --list   # the real thing, reading the evdev nodes
-sudo systemctl start input-lock-x # the check that actually matters
-```
-
-Run the last one too. On SELinux systems a shell `sudo` executes as
-`unconfined_t` and can open input devices even when the service's domain cannot,
-so `--list` succeeding does not prove the service will work.
+The classifier uses evdev capabilities and input properties. It does not depend
+on vendor names. USB and Bluetooth devices can be included when an internal
+keyboard uses one of those buses.
 
 ### Configuration
 
-`/etc/input-lock-x.conf`, never overwritten by a reinstall:
+The configuration file is `/etc/input-lock-x.conf`. It is installed once and
+never overwritten by a reinstall.
 
 ```ini
 [devices]
-mode = auto              # auto | patterns
+mode = auto              # auto or patterns
 include_usb = no
 include_bluetooth = no
 # patterns = AT Translated Set 2 keyboard
 #            *Touchpad
-# exclude  = *Fingerprint*
+# exclude = *Fingerprint*
 
 [behaviour]
-max_lock_seconds = 0     # auto-release after N seconds; 0 disables
+max_lock_seconds = 0     # 0 disables automatic release
 ```
 
-`patterns` are fnmatch globs against the evdev device name, for hardware auto
-detection gets wrong. Setting `patterns` without setting `mode` selects patterns
-mode — so a config written before auto detection existed keeps behaving exactly
-as it did. `exclude` applies in both modes.
+`patterns` are fnmatch globs against the evdev device name. Setting `patterns`
+without setting `mode` also selects patterns mode for compatibility with older
+configs. `exclude` applies in both modes.
 
-`include_usb` and `include_bluetooth` apply to auto mode only, as do the
-touchscreen and virtual-device rules. In patterns mode the pattern is the whole
-decision: it will grab a Bluetooth keyboard, a uinput node or a touchscreen if
-that is what it matches.
-
-Trailing `# comments` work on the single-value settings above. They are *not*
-stripped from `patterns` and `exclude`, because an evdev device name may
-legitimately contain a `#` and truncating one would silently grab the wrong
-device. Put comments on their own line there.
-
-In patterns mode the daemon warns when a pattern matches a touchscreen: that is
-you grabbing your own escape hatch, and it will say so rather than quietly
-comply. At startup it also logs which escape routes remain, and warns when the
-only ones left are Ctrl+Esc and SSH.
-
-### The shortcut
-
-**Rebinding changes how the lock is engaged. It does not change how it is
-released from a locked keyboard.** The daemon holds the internal keyboard
-exclusively while the lock is on, so gnome-shell never sees those keypresses and
-no shell shortcut can fire from that device — including this one.
-
-What still works while locked:
-
-- **Ctrl+Esc**, which the daemon watches for inside its own grab. Fixed in the
-  daemon, not configurable: an escape hatch you can rebind is an escape hatch
-  you can rebind into a lockout.
-- The **panel icon**, via the touchscreen or an ungrabbed pointer.
-- **This shortcut, from a device the daemon did not grab** — an external
-  keyboard, which auto mode leaves alone. The binding is a real toggle; it is
-  only the grabbed keyboard that cannot reach it.
-
-The shortcut is only held while the daemon is installed. Mutter's grab is
-system-wide, and Ctrl+Esc belongs to editors, IDEs and VM windows too, so
-claiming it just to answer "not set up" would be worse than leaving it alone.
-It binds itself the moment the daemon appears, without a re-login.
-
-Rebind the engage shortcut in the extension's preferences (**Extensions → Input
-Lock X → Settings**), or from a shell:
+In patterns mode, matching is explicit: touchscreen, USB/Bluetooth, and virtual
+device safeguards do not apply. Do not match your touchscreen unless you have
+another reliable way back in. Check the result before enabling the lock:
 
 ```sh
-gsettings --schemadir ~/.local/share/gnome-shell/extensions/input-lock-x@isalin.github.io/schemas \
-  set org.gnome.shell.extensions.input-lock-x toggle-hid "['<Control>Escape']"
+sudo input-lock-x-daemon --list
 ```
 
-The key is still named `toggle-hid` for continuity with older installs, even
-though it only engages the lock.
+After editing the file, start the service once and check the journal. On SELinux
+systems, a successful `--list` command does not necessarily mean the systemd
+service can open the devices.
 
----
+## Permissions and security
 
-## Sudo and admin groups
+The polkit rule allows members of `wheel`, `sudo`, or `admin` to start and stop
+this service from an active local session. By default, the installer also adds
+`/etc/sudoers.d/input-lock-x`, allowing those groups to run only the two
+installed control scripts without a password. This makes non-interactive SSH
+recovery possible.
 
-Two files decide who may toggle the lock without a password:
-
-- `/etc/polkit-1/rules.d/49-input-lock-x.rules` lets a **local, active** session
-  belonging to `wheel`, `sudo` or `admin` start and stop this one unit. That is
-  what makes the panel icon work. Distros disagree on the admin group's name —
-  Fedora, Arch and openSUSE use `wheel`, Debian and Ubuntu use `sudo` — so the
-  rule names all three. A group that does not exist simply never matches, so
-  this grants nothing extra.
-- `/etc/sudoers.d/input-lock-x` gives the same three groups passwordless sudo
-  for **only** `input-lock-x` and `input-lock-x-emergency-unlock`. This exists
-  because `ssh host cmd` allocates no TTY, so without it sudo fails with "a
-  terminal is required to read the password" — at the exact moment you need the
-  command.
-
-Decline the second one with `./install.sh --no-sudoers`, and recover with:
-
-```sh
-ssh -t <this-laptop> sudo input-lock-x-emergency-unlock
-```
-
-The scripts detect the situation and print that fallback rather than dying on a
-prompt nobody can answer.
-
-If you are in none of those three groups, `install.sh` says so. The panel button
-will fail with a permission error until you either join your distro's admin
-group or edit the group list in the polkit rule.
-
----
-
-## Files
-
-| Path | Purpose |
-| --- | --- |
-| `extension/` | GNOME Shell extension, symlinked to `~/.local/share/gnome-shell/extensions/input-lock-x@isalin.github.io` unless something else already installed a copy there |
-| `extension/common.js` | unit name and the installed-check, shared by `extension.js` and `prefs.js` |
-| `lib/output.sh` | `say`, `warn`, the boxed warning and the `confirm` prompt, shared by `install.sh` and `uninstall.sh` |
-| `lib/usage.sh` | `--help` text, extracted from the calling script's own header |
-| `lib/paths.sh` | every path this installs, shared by `install.sh` and `uninstall.sh` |
-| `lib/legacy-paths.sh` | the pre-rename paths, shared by `install.sh` and `uninstall.sh` |
-| `lib/release-lock.sh` | release any active grab, shared by `install.sh` and `uninstall.sh` |
-| `daemon/input-lock-x-daemon.py` | the grab daemon → `/usr/local/bin/input-lock-x-daemon` |
-| `daemon/input-lock-x.conf` | which devices to grab → `/etc/` |
-| `daemon/input-lock-x.service` | on-demand unit → `/etc/systemd/system/` |
-| `daemon/49-input-lock-x.rules` | passwordless start/stop for the desktop → `/etc/polkit-1/rules.d/` |
-| `daemon/input-lock-x.sudoers` | passwordless recovery over SSH → `/etc/sudoers.d/` |
-| `scripts/input-lock-x` | `on` / `off` / `toggle` / `status` → `/usr/local/bin/` |
-| `scripts/input-lock-x-emergency-unlock` | unconditional recovery → `/usr/local/bin/` |
-| `tests/classify-from-proc.py` | run the classifier against `/proc`, no root needed |
-| `tests/test_daemon.py` | offline unit tests for classification and config parsing |
-| `tests/test-path-ownership.sh` | offline symlink-ownership smoke test |
-| `.github/workflows/check.yml` | runs `make check` and `make test` on every push and pull request |
-
-Stdlib Python 3 only — no `python3-evdev` or other new system packages.
-
-`make check` syntax-checks and lints everything; `make test` runs the offline
-unit and path-ownership tests before classifying the real machine's devices;
-`make pack` builds the extensions.gnome.org zip. Locally `make check` treats
-`shellcheck` and `node` as optional and prints "not installed, skipped" when
-they are absent — CI asserts both are present before running it, so a skip
-cannot hide a finding.
-
----
+Review these files before installation if that privilege is not appropriate for
+your machine. Use `./install.sh --no-sudoers` to omit the sudoers file.
 
 ## Troubleshooting
 
+Show the current state and matched devices:
+
 ```sh
-make status                                   # lock state + matched devices
-make logs                                     # journalctl -u input-lock-x -f
-journalctl -f -o cat /usr/bin/gnome-shell     # extension errors
-gnome-extensions info input-lock-x@isalin.github.io
+input-lock-x status
+sudo input-lock-x-daemon --list
+journalctl -u input-lock-x.service -b
 ```
 
-**The panel icon is a yellow warning triangle.** The daemon is not installed —
-the extension found no `input-lock-x.service`. This is what the extension half
-on its own looks like, and what you would see if the daemon were uninstalled
-while the extension was left in place. Run `./install.sh` from this
-repository.
+**Yellow warning icon:** the extension cannot find
+`input-lock-x.service`. Install the daemon with `./install.sh` or
+`./install.sh --daemon-only`.
 
-**The shortcut does nothing.** If the panel icon is the warning triangle, that
-is deliberate — the shortcut is not bound without the daemon, and binds itself
-as soon as one is installed. Otherwise check the shell journal
-(`journalctl -f -o cat /usr/bin/gnome-shell`), and whether something else has
-claimed the same keys in **Settings → Keyboard → View and Customize Shortcuts**.
-
-**"Not allowed to toggle the input lock".** polkit refused. Either the rule is
-not installed (`ls /etc/polkit-1/rules.d/49-input-lock-x.rules`) or your user is
-in none of `wheel`, `sudo`, `admin` — check with `id -nG`.
-
-**The daemon refuses to start.** It exits non-zero rather than pretending to
-lock. Check the journal — it distinguishes the causes:
-
-- `no input devices matched` — auto detection found no keyboard or pointer, or
-  your patterns match nothing. Compare against `sudo input-lock-x-daemon --list`.
-- `permission denied opening N input device(s)` — being root is not sufficient;
-  see SELinux below.
-
-### SELinux (Fedora, RHEL, openSUSE)
-
-The daemon lives in `/usr/local/bin` specifically so SELinux labels it `bin_t`,
-which makes systemd transition the service into `unconfined_service_t`. From
-`/usr/local/lib` (`lib_t`) there is no transition, the service stays in `init_t`,
-and **every** `/dev/input/event*` open fails with `EACCES` even though the
-service runs as root.
-
-If it ever regresses, the symptom is a wall of "cannot open /dev/input/eventN:
-Permission denied" in the journal. Check the label and the denials:
+**The panel button or shortcut is denied:** check that the polkit rule exists
+and that your user is in `wheel`, `sudo`, or `admin`:
 
 ```sh
-ls -Z /usr/local/bin/input-lock-x-daemon        # expect ...:bin_t:...
+id -nG
+ls /etc/polkit-1/rules.d/49-input-lock-x.rules
+```
+
+**The daemon finds no devices:** compare its output with `--list`. An internal
+device connected through USB may require `include_usb = yes` or a pattern.
+
+**Permission denied in the service journal:** on SELinux systems, check the
+daemon label and recent denials:
+
+```sh
+ls -Z /usr/local/bin/input-lock-x-daemon
 sudo restorecon -F /usr/local/bin/input-lock-x-daemon
 sudo ausearch -m avc -ts recent
 ```
 
-Distros without SELinux are unaffected; `install.sh` skips the relabel when
-`restorecon` is absent.
-
-### Interaction with `rotation-hid-lock`
-
-The older `rotation-hid-lock@isalin.github.com` extension toggles the touchpad
-through GSettings on rotation. This one never touches GSettings, so the two
-cannot deadlock — but if both are enabled, the old one may flip the touchpad
-GSettings key while this one holds a grab. The grab wins, so the effect is
-cosmetic. Disable the old one to keep things predictable:
+## Development
 
 ```sh
-gnome-extensions disable rotation-hid-lock@isalin.github.com
+make check    # syntax, schema, and available static checks
+make test     # offline tests plus device classification
+make pack     # build the GNOME extension ZIP
 ```
 
----
+The GitHub Actions workflow runs `make check` and `make test` on pushes and pull
+requests. `shellcheck` and `node` are optional for a local `make check`, but CI
+requires them.
 
-## Licence
+The main components are:
+
+| Path | Purpose |
+| --- | --- |
+| `extension/` | GNOME Shell extension |
+| `daemon/` | Root daemon, service, configuration, and policy files |
+| `scripts/` | User-facing control and emergency recovery commands |
+| `lib/` | Installer and uninstaller helpers |
+| `tests/` | Offline unit tests and device classifier |
+
+## License
 
 Copyright (C) 2026 Isak Lindgren.
 
-This program is free software; you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free Software
-Foundation; either version 2 of the License, or (at your option) any later
-version.
-
-It is distributed in the hope that it will be useful, but **without any
-warranty** — without even the implied warranty of merchantability or fitness
-for a particular purpose. See the [LICENSE](LICENSE) file for the full text.
-
-Every source file carries `SPDX-License-Identifier: GPL-2.0-or-later`.
+This project is licensed under the GNU General Public License, version 2 or
+later. See [LICENSE](LICENSE).
