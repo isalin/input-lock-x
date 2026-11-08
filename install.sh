@@ -41,7 +41,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # Both sets of names, the release sequence and the warning formatting live in
 # files shared with uninstall.sh so the two can never disagree about any of
 # them.
-for helper in output usage paths legacy-paths release-lock; do
+for helper in output usage paths legacy-paths release-lock extension-live; do
     if [[ ! -r "$REPO/lib/$helper.sh" ]]; then
         echo "missing $REPO/lib/$helper.sh -- run this from a full checkout" >&2
         exit 1
@@ -57,6 +57,9 @@ source "$REPO/lib/paths.sh"
 source "$REPO/lib/legacy-paths.sh"
 # shellcheck source=lib/release-lock.sh
 source "$REPO/lib/release-lock.sh"
+# Only install.sh asks the running shell what it loaded.
+# shellcheck source=lib/extension-live.sh
+source "$REPO/lib/extension-live.sh"
 
 INSTALL_SUDOERS=1
 # auto: link only if nothing else owns the extension directory.
@@ -415,9 +418,10 @@ foreign)
         "" \
         "    ./install.sh --link-extension" \
         "" \
-        "No logout needed: the installed extension notices the daemon within" \
-        "a second of the systemd reload further down, and the panel icon" \
-        "starts working on its own."
+        "If that copy is running, it notices the daemon within a second of" \
+        "the systemd reload further down, and the panel icon starts working" \
+        "on its own -- no logout needed. The end of this output says if" \
+        "GNOME reports it as not running."
     ;;
 skip)
     say "Leaving the extensions directory alone (--daemon-only)"
@@ -618,8 +622,23 @@ if [[ $EXT_ENABLE -eq 1 ]]; then
     enabled=0
     if command -v gnome-extensions >/dev/null 2>&1 && \
             gnome-extensions enable "$UUID" 2>/dev/null; then
-        echo "   enabled"
         enabled=1
+        # Exit 0 only means the shell knew the UUID and enabled-extensions now
+        # lists it. An OUT OF DATE or ERROR extension is "enabled" that way and
+        # not running, and so is every extension while user extensions are
+        # switched off -- so the state is reported, not assumed.
+        if [[ "$(ext_shell_setting disable-user-extensions)" == true ]]; then
+            echo "   switched on, but user extensions are off -- see below"
+        else
+            ext_live_settle "$UUID"
+            if ext_is_running "$EXT_LIVE_STATE"; then
+                echo "   enabled"
+            elif [[ -z "$EXT_LIVE_STATE" ]]; then
+                echo "   switched on"
+            else
+                echo "   switched on, but GNOME reports it as $EXT_LIVE_STATE -- see below"
+            fi
+        fi
     fi
 
     if [[ $enabled -eq 0 ]]; then
@@ -690,90 +709,30 @@ fi
 
 printf '\n== Installed.\n'
 
-# The relogin is only needed for an extension we just put on disk: Wayland
-# cannot load one in place. A copy that was already installed is already
-# loaded, and it finds the daemon by itself -- extension.js subscribes to
-# systemd's Reloading signal, which the daemon-reload above emits.
+# Whether to log out. The shell reads an extension once, at login, and
+# disable/enable does not re-read it, so an extension put on disk by this run
+# needs a logout -- and so does one that was already there, if what the
+# session loaded is not what is on disk now: OUT OF DATE after a GNOME
+# upgrade, ERROR, or an older version. What does not need one is a daemon
+# update under a running extension: extension.js subscribes to systemd's
+# Reloading signal, which the daemon-reload above emits. lib/extension-live.sh
+# asks GNOME which of those it is, and says so when it cannot tell.
+#
+# Nothing for --daemon-only with nothing at $EXT_DIR: the enable block above
+# has already said there is no extension.
+ext_who=""
 if [[ $EXT_NEWLY_LINKED -eq 1 ]]; then
-    cat <<'EOF'
-
-Log out and back in before the extension loads -- Wayland cannot reload
-extensions in place.
-EOF
-elif [[ "$EXT_ACTION" == keep ]]; then
-    # Already linked is not the same as up to date. The shell reads an
-    # extension once, at login, and disable/enable does not re-read it -- so
-    # after a `git pull` that touched extension/, the session is still running
-    # the old copy. And one GNOME refused to load at all -- OUT OF DATE after a
-    # GNOME upgrade, the very thing an update is usually for -- is not running
-    # however enabled it looks: `gnome-extensions enable` above exits 0 on it.
-    #
-    # Only OUT OF DATE and ERROR are definitive, and both names are stable
-    # across 45+. Anything else, including no answer at all (over SSH there is
-    # no session bus to ask), gets the conditional message.
-    ext_live_state="$(gnome-extensions info "$UUID" 2>/dev/null \
-        | sed -n 's/^[[:space:]]*State:[[:space:]]*//p')" || true
-    case "$ext_live_state" in
-    "OUT OF DATE")
-        # A logout only helps if this checkout lists the GNOME Shell that is
-        # installed -- which is what the next login will run, even when the
-        # running shell is older. Without this, the next GNOME upgrade would
-        # get the same wrong instruction this message was rewritten to stop.
-        shell_major="$(gnome-shell --version 2>/dev/null \
-            | sed -n 's/^GNOME Shell \([0-9][0-9]*\).*/\1/p')" || true
-        ext_supported=""
-        if [[ -n "$shell_major" ]]; then
-            ext_supported="$(/usr/bin/python3 -c '
-import json, sys
-with open(sys.argv[1]) as f:
-    versions = json.load(f)["shell-version"]
-print("yes" if sys.argv[2] in versions else "no")
-' "$REPO/extension/metadata.json" "$shell_major" 2>/dev/null)" || true
-        fi
-        if [[ "$ext_supported" == no ]]; then
-            cat <<EOF
-
-GNOME reports the extension as OUT OF DATE: this version of Input Lock X does
-not support GNOME Shell $shell_major yet, so logging out will not fix it.
-Check for a newer release:
-
-    https://github.com/isalin/input-lock-x/releases
-EOF
-        else
-            cat <<'EOF'
-
-GNOME reports the extension as OUT OF DATE, so it is not running. Log out and
-back in to load this version -- Wayland cannot reload extensions in place.
-EOF
-        fi
-        ;;
-    ERROR)
-        cat <<'EOF'
-
-GNOME reports the extension as ERROR, so it is not running. Log out and back in
-to load this version. If it still fails, the reason is in the shell's log:
-
-    journalctl -b /usr/bin/gnome-shell | grep -i input-lock-x
-EOF
-        ;;
-    *)
-        cat <<'EOF'
-
-The extension was already linked. If it changed since you last logged in --
-after a git pull, say -- log out and back in to load the new version; Wayland
-cannot reload extensions in place. If only the daemon changed, no logout is
-needed: the running extension picks it up on its own.
-EOF
-        ;;
-    esac
+    ext_who=new
+elif [[ $EXT_IS_REPO -eq 1 ]]; then
+    ext_who=own
 elif [[ "$EXT_STATE" != absent ]]; then
     # `skip` and `foreign`: neither touched the directory, so EXT_STATE still
-    # describes what is on disk, and whatever is there was loaded at login.
-    cat <<'EOF'
-
-No logout needed -- the extension that is already installed picks the daemon
-up on its own, within a second or so.
-EOF
+    # describes what is on disk.
+    ext_who=other
+fi
+if [[ -n "$ext_who" ]]; then
+    ext_gather "$UUID" "$EXT_DIR/metadata.json"
+    ext_advice "$ext_who"
 fi
 
 cat <<EOF

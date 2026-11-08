@@ -60,7 +60,9 @@ check:
 	@bash -n lib/paths.sh && echo "lib/paths.sh: ok"
 	@bash -n lib/legacy-paths.sh && echo "lib/legacy-paths.sh: ok"
 	@bash -n lib/release-lock.sh && echo "lib/release-lock.sh: ok"
+	@bash -n lib/extension-live.sh && echo "lib/extension-live.sh: ok"
 	@bash -n tests/test-path-ownership.sh && echo "path ownership test: ok"
+	@bash -n tests/test-extension-live.sh && echo "extension live state test: ok"
 	@# Optional: shellcheck catches the set -e and quoting traps `sh -n` cannot.
 	@# No -S: the tree is clean at the default severity, which includes style
 	@# and info, and the two places that genuinely want an unquoted expansion
@@ -73,9 +75,9 @@ check:
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck install.sh uninstall.sh \
 			lib/output.sh lib/usage.sh lib/paths.sh lib/legacy-paths.sh \
-			lib/release-lock.sh \
+			lib/release-lock.sh lib/extension-live.sh \
 			scripts/input-lock-x scripts/input-lock-x-emergency-unlock \
-			tests/test-path-ownership.sh \
+			tests/test-path-ownership.sh tests/test-extension-live.sh \
 			&& echo "shellcheck: ok"; \
 	else \
 		echo "shellcheck: not installed, skipped"; \
@@ -106,6 +108,7 @@ check:
 test:
 	@python3 -m unittest discover -s tests -p 'test_*.py'
 	@bash tests/test-path-ownership.sh
+	@bash tests/test-extension-live.sh
 	@python3 tests/classify-from-proc.py
 
 # Built from a staging copy so gschemas.compiled -- which a local `make schemas`
