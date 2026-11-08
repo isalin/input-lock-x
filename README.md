@@ -158,10 +158,17 @@ ssh -t <this-machine> sudo input-lock-x-emergency-unlock
 Pull the changes and run the installer again:
 
 ```sh
-git -C /path/to/input-lock-x pull
 cd /path/to/input-lock-x
+git pull
 ./install.sh
 ```
+
+As on the first install, the installer briefly engages the lock to verify the
+service. A lock that was already engaged is released.
+
+Then log out and back in. GNOME loads extensions when the session starts, so
+until then it keeps running the previous version — or, after a GNOME upgrade,
+keeps reporting the extension as `OUT OF DATE`.
 
 The daemon and system files are installed as copies. The extension is a symlink,
 so do not delete or move the checkout while using it.

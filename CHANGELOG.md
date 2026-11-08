@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Updating: the README now says to log out and back in after an update, and
+  the installer no longer says no logout is needed when the extension is
+  `OUT OF DATE`, in `ERROR`, or may have changed since login.
+
 ## 1.0.1 — 2026-11-08
 
 - GNOME Shell 51 support.

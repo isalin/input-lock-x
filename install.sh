@@ -701,11 +701,71 @@ Log out and back in before the extension loads -- Wayland cannot reload
 extensions in place.
 EOF
 elif [[ "$EXT_ACTION" == keep ]]; then
-    cat <<'EOF'
+    # Already linked is not the same as up to date. The shell reads an
+    # extension once, at login, and disable/enable does not re-read it -- so
+    # after a `git pull` that touched extension/, the session is still running
+    # the old copy. And one GNOME refused to load at all -- OUT OF DATE after a
+    # GNOME upgrade, the very thing an update is usually for -- is not running
+    # however enabled it looks: `gnome-extensions enable` above exits 0 on it.
+    #
+    # Only OUT OF DATE and ERROR are definitive, and both names are stable
+    # across 45+. Anything else, including no answer at all (over SSH there is
+    # no session bus to ask), gets the conditional message.
+    ext_live_state="$(gnome-extensions info "$UUID" 2>/dev/null \
+        | sed -n 's/^[[:space:]]*State:[[:space:]]*//p')" || true
+    case "$ext_live_state" in
+    "OUT OF DATE")
+        # A logout only helps if this checkout lists the GNOME Shell that is
+        # installed -- which is what the next login will run, even when the
+        # running shell is older. Without this, the next GNOME upgrade would
+        # get the same wrong instruction this message was rewritten to stop.
+        shell_major="$(gnome-shell --version 2>/dev/null \
+            | sed -n 's/^GNOME Shell \([0-9][0-9]*\).*/\1/p')" || true
+        ext_supported=""
+        if [[ -n "$shell_major" ]]; then
+            ext_supported="$(/usr/bin/python3 -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    versions = json.load(f)["shell-version"]
+print("yes" if sys.argv[2] in versions else "no")
+' "$REPO/extension/metadata.json" "$shell_major" 2>/dev/null)" || true
+        fi
+        if [[ "$ext_supported" == no ]]; then
+            cat <<EOF
 
-The extension was already linked, so it is already loaded and no logout is
-needed -- unless you have not logged out since you first installed it.
+GNOME reports the extension as OUT OF DATE: this version of Input Lock X does
+not support GNOME Shell $shell_major yet, so logging out will not fix it.
+Check for a newer release:
+
+    https://github.com/isalin/input-lock-x/releases
 EOF
+        else
+            cat <<'EOF'
+
+GNOME reports the extension as OUT OF DATE, so it is not running. Log out and
+back in to load this version -- Wayland cannot reload extensions in place.
+EOF
+        fi
+        ;;
+    ERROR)
+        cat <<'EOF'
+
+GNOME reports the extension as ERROR, so it is not running. Log out and back in
+to load this version. If it still fails, the reason is in the shell's log:
+
+    journalctl -b /usr/bin/gnome-shell | grep -i input-lock-x
+EOF
+        ;;
+    *)
+        cat <<'EOF'
+
+The extension was already linked. If it changed since you last logged in --
+after a git pull, say -- log out and back in to load the new version; Wayland
+cannot reload extensions in place. If only the daemon changed, no logout is
+needed: the running extension picks it up on its own.
+EOF
+        ;;
+    esac
 elif [[ "$EXT_STATE" != absent ]]; then
     # `skip` and `foreign`: neither touched the directory, so EXT_STATE still
     # describes what is on disk, and whatever is there was loaded at login.
