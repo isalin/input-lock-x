@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1 — 2026-11-08
+
+- GNOME Shell 51 support.
+
 ## 1.0.0 — 2026-08-30
 
 Initial public release of Input Lock X:

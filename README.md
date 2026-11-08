@@ -7,7 +7,7 @@ It uses a small companion root daemon to grab selected evdev devices while
 leaving the touchscreen available in auto mode for recovery.
 
 Use it when folding a 2-in-1 laptop into tablet mode or cleaning a touchscreen
-without accidental input. It supports GNOME Shell 45–50 on Wayland and X11.
+without accidental input. It supports GNOME Shell 45–51 on Wayland and X11.
 
 - Toggle the lock from the panel.
 - Use **Ctrl+Esc** to engage or release it.
@@ -24,7 +24,7 @@ evdev capabilities rather than a list of machine-specific names.
 
 ## Requirements
 
-- GNOME Shell 45–50, on Wayland or X11
+- GNOME Shell 45–51, on Wayland or X11
 - systemd
 - polkit 0.106 or newer
 - Python 3 (standard library only)
