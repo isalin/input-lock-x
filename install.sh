@@ -609,6 +609,34 @@ case $verify_rc in
         exit 1 ;;
 esac
 
+# Whether to log out, and what to say when switching the extension on. The
+# shell reads an extension once, at login, and imports its code no later than
+# the first time it is switched on; after that, disable/enable runs the same
+# code again. So an extension put on disk by this run needs a logout, and so
+# does one that was already there if what the session has is not what is on
+# disk now: OUT OF DATE after a GNOME upgrade, ERROR, another version, or files
+# changed since the session started. What does not need one is a daemon update
+# under a running extension: extension.js subscribes to systemd's Reloading
+# signal, which the daemon-reload above emits. lib/extension-live.sh works out
+# which of those it is, and says so when it cannot tell.
+#
+# Asked once, here, so that the line the enable step prints and the paragraph
+# at the end are about the same answers. Nothing for --daemon-only with nothing
+# at $EXT_DIR: the enable block says there is no extension.
+ext_who=""
+if [[ $EXT_NEWLY_LINKED -eq 1 ]]; then
+    ext_who=new
+elif [[ $EXT_IS_REPO -eq 1 ]]; then
+    ext_who=own
+elif [[ "$EXT_STATE" != absent ]]; then
+    # `skip` and `foreign`: neither touched the directory, so EXT_STATE still
+    # describes what is on disk.
+    ext_who=other
+fi
+if [[ -n "$ext_who" ]]; then
+    ext_gather "$UUID" "$EXT_DIR" "$REPO/extension"
+fi
+
 # Only for an extension this run is responsible for. "Idempotent, so it just
 # confirms it is switched on" was wrong twice over: the fallback below rewrites
 # disabled-extensions, so a --daemon-only or `foreign` run silently switched
@@ -618,38 +646,22 @@ if [[ $EXT_ENABLE -eq 1 ]]; then
     say "Enabling the extension"
     # gnome-extensions goes through the running shell, and on a first install
     # the shell has never seen this UUID -- the extension directory was linked
-    # seconds ago -- so this call fails exactly when it matters most.
-    enabled=0
-    if command -v gnome-extensions >/dev/null 2>&1 && \
-            gnome-extensions enable "$UUID" 2>/dev/null; then
-        enabled=1
-        # Exit 0 only means the shell knew the UUID and enabled-extensions now
-        # lists it. An OUT OF DATE or ERROR extension is "enabled" that way and
-        # not running, and so is every extension while user extensions are
-        # switched off -- so the state is reported, not assumed.
-        if [[ "$(ext_shell_setting disable-user-extensions)" == true ]]; then
-            echo "   switched on, but user extensions are off -- see below"
-        else
-            ext_live_settle "$UUID"
-            if ext_is_running "$EXT_LIVE_STATE"; then
-                echo "   enabled"
-            elif [[ -z "$EXT_LIVE_STATE" ]]; then
-                echo "   switched on"
-            else
-                echo "   switched on, but GNOME reports it as $EXT_LIVE_STATE -- see below"
-            fi
-        fi
-    fi
-
-    if [[ $enabled -eq 0 ]]; then
+    # seconds ago -- so this fails exactly when it matters most. Exit 0 only
+    # means enabled-extensions lists it now: an OUT OF DATE or ERROR extension
+    # is "enabled" that way and not running, and so is every extension while
+    # user extensions are switched off or the screen is locked. So what GNOME
+    # shows is reported, not assumed.
+    if ext_switch_on "$UUID"; then
+        ext_enable_how=enabled
+    else
         # Fall back to the settings the shell reads at startup. Same switch,
         # one layer down, and it does not care whether anything has scanned the
         # directory yet -- which is what turns "installed" into "working" after
         # the log out and back in, instead of leaving a manual step in the
         # fresh-install path for the user to notice in scrollback.
-        queue_rc=0
+        ext_enable_how=queued
         # Heredoc body and terminator stay at column 0, as they must.
-        /usr/bin/python3 - "$UUID" <<'PY' || queue_rc=$?
+        /usr/bin/python3 - "$UUID" <<'PY' || ext_enable_how=failed
 import ast
 import subprocess
 import sys
@@ -686,15 +698,8 @@ enabled = read("enabled-extensions")
 if uuid not in enabled:
     write("enabled-extensions", enabled + [uuid])
 PY
-
-        if [[ $queue_rc -eq 0 ]]; then
-            echo "   queued -- it comes up enabled after the log out and back in"
-        else
-            echo "   could not enable it, and could not queue it either." >&2
-            echo "   Run this after logging back in:" >&2
-            echo "       gnome-extensions enable $UUID" >&2
-        fi
     fi
+    ext_enable_report "$ext_who" "$ext_enable_how"
 elif [[ "$EXT_STATE" == absent ]]; then
     say "No extension to enable"
     echo "   nothing at $EXT_DIR."
@@ -709,29 +714,7 @@ fi
 
 printf '\n== Installed.\n'
 
-# Whether to log out. The shell reads an extension once, at login, and
-# disable/enable does not re-read it, so an extension put on disk by this run
-# needs a logout -- and so does one that was already there, if what the
-# session loaded is not what is on disk now: OUT OF DATE after a GNOME
-# upgrade, ERROR, or an older version. What does not need one is a daemon
-# update under a running extension: extension.js subscribes to systemd's
-# Reloading signal, which the daemon-reload above emits. lib/extension-live.sh
-# asks GNOME which of those it is, and says so when it cannot tell.
-#
-# Nothing for --daemon-only with nothing at $EXT_DIR: the enable block above
-# has already said there is no extension.
-ext_who=""
-if [[ $EXT_NEWLY_LINKED -eq 1 ]]; then
-    ext_who=new
-elif [[ $EXT_IS_REPO -eq 1 ]]; then
-    ext_who=own
-elif [[ "$EXT_STATE" != absent ]]; then
-    # `skip` and `foreign`: neither touched the directory, so EXT_STATE still
-    # describes what is on disk.
-    ext_who=other
-fi
 if [[ -n "$ext_who" ]]; then
-    ext_gather "$UUID" "$EXT_DIR/metadata.json"
     ext_advice "$ext_who"
 fi
 

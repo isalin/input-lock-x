@@ -170,11 +170,16 @@ Then log out and back in if the extension changed. GNOME loads extensions only
 when the session starts, so until then it keeps running the previous version —
 or, after a GNOME upgrade, keeps reporting the extension as `OUT OF DATE`.
 
-The installer asks GNOME what it has loaded and tells you when a logout is
-needed. When it cannot tell, log out if anything under `extension/` changed;
+The installer tells you when a logout is needed. It asks GNOME what it has
+loaded, and checks whether the extension's files changed after your session
+started. When it cannot tell, log out if anything under `extension/` changed;
 `git pull` lists the files it updated. An update that changed only the daemon
 needs no logout, because the running extension picks up the new daemon on its
 own.
+
+If you update over SSH while the screen is locked, the extension is not
+running until you unlock it. GNOME stops it on the lock screen, as it does
+every extension that does not run there.
 
 The daemon and system files are installed as copies. The extension is a symlink,
 so do not delete or move the checkout while using it.

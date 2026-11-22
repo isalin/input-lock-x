@@ -2,13 +2,18 @@
 
 ## Unreleased
 
-- Updating: the installer asks GNOME Shell what it has loaded and says when to
-  log out: when the extension is `OUT OF DATE`, in `ERROR`, not loaded yet, or
-  older than the installed copy. It also says when a logout cannot help,
-  because the installed GNOME Shell is not supported, and when user extensions
-  are switched off. It no longer says no logout is needed for an extension it
-  cannot see running, and reports the extension as enabled only once GNOME
-  shows it running. The README's update instructions match.
+- Updating: the installer says whether you need to log out. It asks GNOME
+  Shell what it has loaded, and checks whether the extension's files changed
+  after the session started, which is how it notices a `git pull` between
+  releases. It says to log out when the extension is `OUT OF DATE`, in
+  `ERROR`, not loaded yet, another version, or changed since login. It says
+  when a logout cannot help: the installed GNOME Shell is not supported,
+  `metadata.json` is broken, or GNOME is set not to load extensions from the
+  home directory. It also says when user extensions are switched off, and when
+  the extension is stopped only because the screen is locked. The line under
+  "Enabling the extension" and the advice at the end always agree, and the
+  extension is reported as enabled only once GNOME shows it running. The
+  README's update instructions match.
 
 ## 1.0.1 — 2026-11-08
 
