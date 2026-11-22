@@ -237,11 +237,22 @@ echo "x" >"$FAKE/shell-pid"
 expect "not a PID" "$(ext_shell_started)" ""
 
 # A command name with a space and parentheses in it, which is what
-# /proc/<pid>/stat is hard to split around.
-mkdir -p "$TEST_ROOT/odd"
-cp "$(type -P sleep)" "$TEST_ROOT/odd/x) y (z"
-"$TEST_ROOT/odd/x) y (z" 60 &
+# /proc/<pid>/stat is hard to split around. A subshell renames itself and then
+# blocks opening a FIFO nobody writes to. Not a renamed copy of sleep: where
+# coreutils is one binary that picks the program by its own name, that copy
+# refuses to run.
+odd='x) y (z'
+mkfifo "$TEST_ROOT/never"
+(
+    printf '%s' "$odd" >"/proc/$BASHPID/comm"
+    read -r _ <"$TEST_ROOT/never"
+) &
 BG_PID=$!
+for _ in {1..100}; do
+    [[ "$(cat "/proc/$BG_PID/comm" 2>/dev/null)" != "$odd" ]] || break
+    command sleep 0.01
+done
+expect "renamed" "$(cat "/proc/$BG_PID/comm")" "$odd"
 echo "$BG_PID" >"$FAKE/shell-pid"
 started="$(ext_shell_started)"
 now="$(date +%s)"
